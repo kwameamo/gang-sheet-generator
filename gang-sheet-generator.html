@@ -54,12 +54,13 @@
         // Firebase Configuration
         // IMPORTANT: Replace these with your actual Firebase config
         const firebaseConfig = {
-            apiKey: "YOUR_FIREBASE_API_KEY",
-            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-            projectId: "YOUR_PROJECT_ID",
-            storageBucket: "YOUR_PROJECT_ID.appspot.com",
-            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-            appId: "YOUR_APP_ID"
+            apiKey: "AIzaSyDKrZjjyI32XMhFBj-12tpau-aZJsOZ8pg",
+            authDomain: "gang-sheet-generator-ab17c.firebaseapp.com",
+            projectId: "gang-sheet-generator-ab17c",
+            storageBucket: "gang-sheet-generator-ab17c.firebasestorage.app",
+            messagingSenderId: "856756686451",
+            appId: "1:856756686451:web:90373cc3f29764e6b26406",
+            measurementId: "G-J4ZMRE0DQK"
         };
 
         // Initialize Firebase
@@ -96,10 +97,6 @@
             const [user, setUser] = useState(null);
             const [showAuth, setShowAuth] = useState(false);
             const [activeTab, setActiveTab] = useState('generator');
-            const [showLanding, setShowLanding] = useState(true);
-            const [showPrivacy, setShowPrivacy] = useState(false);
-            const [showTerms, setShowTerms] = useState(false);
-            const [showContact, setShowContact] = useState(false);
             
             const [uploadedImage, setUploadedImage] = useState(null);
             const [imageDataUrl, setImageDataUrl] = useState(null);
@@ -177,28 +174,11 @@
                 
                 const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
                     if (firebaseUser) {
-                        // Check if user document exists, create if not
-                        const userDocRef = db.collection('users').doc(firebaseUser.uid);
-                        const userDoc = await userDocRef.get();
-                        
-                        if (!userDoc.exists) {
-                            // New user - create document with registration date
-                            await userDocRef.set({
-                                email: firebaseUser.email,
-                                name: firebaseUser.displayName,
-                                picture: firebaseUser.photoURL,
-                                memberSince: firebase.firestore.FieldValue.serverTimestamp()
-                            });
-                        }
-                        
-                        const userDataFromDb = userDoc.exists ? userDoc.data() : {};
-                        
                         const userData = {
                             uid: firebaseUser.uid,
                             email: firebaseUser.email,
                             name: firebaseUser.displayName,
-                            picture: firebaseUser.photoURL,
-                            memberSince: userDataFromDb.memberSince?.toDate?.() || new Date()
+                            picture: firebaseUser.photoURL
                         };
                         setUser(userData);
                         await loadSavedSheets(firebaseUser.uid);
@@ -227,17 +207,11 @@
                     
                     if (useDemoMode) {
                         // Create demo user
-                        const memberSince = localStorage.getItem('gangsheet_demo_membersince') || new Date().toISOString();
-                        if (!localStorage.getItem('gangsheet_demo_membersince')) {
-                            localStorage.setItem('gangsheet_demo_membersince', memberSince);
-                        }
-                        
                         const demoUser = {
                             email: 'demo@gangsheet.app',
                             name: 'Demo User',
                             picture: 'https://ui-avatars.com/api/?name=Demo+User&background=6366f1&color=fff',
-                            isDemo: true,
-                            memberSince: new Date(memberSince)
+                            isDemo: true
                         };
                         setUser(demoUser);
                         localStorage.setItem('gangsheet_user', JSON.stringify(demoUser));
@@ -771,7 +745,7 @@
 
             const saveSheetLocal = (sheetData) => {
                 try {
-                    sheetData.id = Date.now().toString(); // Ensure ID is string for consistency
+                    sheetData.id = Date.now();
                     const sheets = JSON.parse(localStorage.getItem(`gangsheet_saved_${user.email}`) || '[]');
                     sheets.push(sheetData);
                     localStorage.setItem(`gangsheet_saved_${user.email}`, JSON.stringify(sheets));
@@ -780,7 +754,7 @@
                     alert('Gang sheet saved locally!');
                 } catch (error) {
                     console.error("Error saving locally:", error);
-                    alert('Failed to save gang sheet. Please try again.');
+                    alert('Failed to save gang sheet.');
                 }
             };
 
@@ -855,148 +829,6 @@
 
             return (
                 <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-                    {/* Landing Page */}
-                    {showLanding && !user && (
-                        <div className="min-h-screen flex flex-col">
-                            {/* Landing Header */}
-                            <header className="bg-white shadow-sm">
-                                <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8 flex justify-between items-center">
-                                    <h1 className="text-2xl font-bold text-gray-900">CurioGraphicsYard</h1>
-                                    <button
-                                        onClick={() => setShowAuth(true)}
-                                        className="px-6 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition"
-                                    >
-                                        Sign In
-                                    </button>
-                                </div>
-                            </header>
-
-                            {/* Hero Section */}
-                            <div className="flex-1 flex items-center justify-center px-4 py-16">
-                                <div className="max-w-5xl mx-auto text-center">
-                                    <h1 className="text-5xl md:text-6xl font-bold text-gray-900 mb-6">
-                                        Create Perfect Gang Sheets
-                                        <span className="block text-indigo-600 mt-2">In Seconds</span>
-                                    </h1>
-                                    <p className="text-xl text-gray-600 mb-8 max-w-3xl mx-auto">
-                                        Professional gang sheet generator for sticker makers, print businesses, and creatives. 
-                                        Upload your designs, set dimensions, and export at 300 DPI.
-                                    </p>
-                                    
-                                    <div className="flex flex-col sm:flex-row gap-4 justify-center mb-12">
-                                        <button
-                                            onClick={() => setShowLanding(false)}
-                                            className="px-8 py-4 text-lg font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition shadow-lg"
-                                        >
-                                            Start Creating Free
-                                        </button>
-                                        <button
-                                            onClick={() => setShowAuth(true)}
-                                            className="px-8 py-4 text-lg font-semibold text-indigo-600 bg-white hover:bg-gray-50 border-2 border-indigo-600 rounded-lg transition"
-                                        >
-                                            Sign In
-                                        </button>
-                                    </div>
-
-                                    {/* Features Grid */}
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mt-16">
-                                        <div className="bg-white rounded-lg p-6 shadow-md">
-                                            <div className="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-                                                <svg className="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                                </svg>
-                                            </div>
-                                            <h3 className="text-lg font-semibold mb-2">Multi-Image Support</h3>
-                                            <p className="text-gray-600 text-sm">Upload up to 5 different designs per sheet. Perfect for variety packs!</p>
-                                        </div>
-
-                                        <div className="bg-white rounded-lg p-6 shadow-md">
-                                            <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-                                                <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                                </svg>
-                                            </div>
-                                            <h3 className="text-lg font-semibold mb-2">300 DPI Export</h3>
-                                            <p className="text-gray-600 text-sm">Export in JPEG, PDF, or PNG at professional print quality.</p>
-                                        </div>
-
-                                        <div className="bg-white rounded-lg p-6 shadow-md">
-                                            <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-                                                <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
-                                                </svg>
-                                            </div>
-                                            <h3 className="text-lg font-semibold mb-2">Cloud Storage</h3>
-                                            <p className="text-gray-600 text-sm">Save your sheets to the cloud and access them anywhere.</p>
-                                        </div>
-
-                                        <div className="bg-white rounded-lg p-6 shadow-md">
-                                            <div className="w-12 h-12 bg-yellow-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-                                                <svg className="w-6 h-6 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-                                                </svg>
-                                            </div>
-                                            <h3 className="text-lg font-semibold mb-2">Custom Dimensions</h3>
-                                            <p className="text-gray-600 text-sm">Set exact sizes in mm, cm, inches, or pixels for each image.</p>
-                                        </div>
-
-                                        <div className="bg-white rounded-lg p-6 shadow-md">
-                                            <div className="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-                                                <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1H5a1 1 0 01-1-1v-3zM14 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1h-4a1 1 0 01-1-1v-3z" />
-                                                </svg>
-                                            </div>
-                                            <h3 className="text-lg font-semibold mb-2">Auto-Fill Sheet</h3>
-                                            <p className="text-gray-600 text-sm">Automatically calculate how many copies fit on your paper.</p>
-                                        </div>
-
-                                        <div className="bg-white rounded-lg p-6 shadow-md">
-                                            <div className="w-12 h-12 bg-pink-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-                                                <svg className="w-6 h-6 text-pink-600" fill="currentColor" viewBox="0 0 20 20">
-                                                    <path fillRule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clipRule="evenodd" />
-                                                </svg>
-                                            </div>
-                                            <h3 className="text-lg font-semibold mb-2">100% Free</h3>
-                                            <p className="text-gray-600 text-sm">All features unlocked. No hidden fees. No paywalls. Forever.</p>
-                                        </div>
-                                    </div>
-
-                                    {/* CTA Section */}
-                                    <div className="mt-16 bg-white rounded-2xl shadow-xl p-8">
-                                        <h2 className="text-3xl font-bold mb-4">Ready to Get Started?</h2>
-                                        <p className="text-gray-600 mb-6">Join thousands of creators making perfect gang sheets</p>
-                                        <button
-                                            onClick={() => setShowLanding(false)}
-                                            className="px-8 py-4 text-lg font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition shadow-lg"
-                                        >
-                                            Try It Now - No Sign Up Required
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Landing Footer */}
-                            <footer className="bg-gray-900 text-white py-8">
-                                <div className="max-w-7xl mx-auto px-4 text-center">
-                                    <p className="text-sm text-gray-400">
-                                        © {new Date().getFullYear()} CurioGraphicsYard. All rights reserved.<br />
-                                        Engineered by <span className="text-indigo-400 font-semibold">CurioLabs</span> • Registered Trademark ®
-                                    </p>
-                                    <div className="flex justify-center gap-4 mt-4 text-sm text-gray-400">
-                                        <button onClick={() => setShowPrivacy(true)} className="hover:text-white transition">Privacy</button>
-                                        <span>•</span>
-                                        <button onClick={() => setShowTerms(true)} className="hover:text-white transition">Terms</button>
-                                        <span>•</span>
-                                        <button onClick={() => setShowContact(true)} className="hover:text-white transition">Contact</button>
-                                    </div>
-                                </div>
-                            </footer>
-                        </div>
-                    )}
-
-                    {/* Main App (shows when landing is closed or user is logged in) */}
-                    {(!showLanding || user) && (
-                    <>
                     {/* Header */}
                     <header className="bg-white shadow-sm">
                         <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8 flex justify-between items-center">
@@ -1634,9 +1466,7 @@
                                             </div>
                                             <div className="bg-gray-50 rounded-lg p-4">
                                                 <p className="text-sm text-gray-600">Member Since</p>
-                                                <p className="text-2xl font-bold text-indigo-600">
-                                                    {user.memberSince ? new Date(user.memberSince).getFullYear() : new Date().getFullYear()}
-                                                </p>
+                                                <p className="text-2xl font-bold text-indigo-600">2024</p>
                                             </div>
                                         </div>
                                     </div>
@@ -1706,244 +1536,6 @@
                     {/* Hidden canvas for export */}
                     <canvas ref={exportCanvasRef} style={{ display: 'none' }} />
                     
-                    {/* Privacy Policy Modal */}
-                    {showPrivacy && (
-                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
-                            <div className="bg-white rounded-lg p-8 max-w-3xl w-full my-8">
-                                <div className="flex justify-between items-start mb-6">
-                                    <h2 className="text-3xl font-bold">Privacy Policy</h2>
-                                    <button onClick={() => setShowPrivacy(false)} className="text-gray-500 hover:text-gray-700">
-                                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                        </svg>
-                                    </button>
-                                </div>
-                                <div className="prose max-w-none">
-                                    <p className="text-sm text-gray-600 mb-4">Effective Date: {new Date().toLocaleDateString()}</p>
-                                    
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">1. Information We Collect</h3>
-                                    <p>When you use Gang Sheet Generator, we collect:</p>
-                                    <ul className="list-disc pl-6 mb-4">
-                                        <li>Email address and name from your Google account (when you sign in)</li>
-                                        <li>Gang sheet designs you create and save</li>
-                                        <li>Usage data to improve our service</li>
-                                    </ul>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">2. How We Use Your Information</h3>
-                                    <p>We use your information to:</p>
-                                    <ul className="list-disc pl-6 mb-4">
-                                        <li>Provide and maintain the service</li>
-                                        <li>Save your gang sheets to your account</li>
-                                        <li>Improve and optimize our application</li>
-                                        <li>Communicate with you about updates</li>
-                                    </ul>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">3. Data Storage</h3>
-                                    <p>Your data is stored securely using:</p>
-                                    <ul className="list-disc pl-6 mb-4">
-                                        <li>Firebase Cloud Firestore (Google Cloud Platform)</li>
-                                        <li>Industry-standard encryption</li>
-                                        <li>Your browser's local storage for temporary data</li>
-                                    </ul>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">4. Data Sharing</h3>
-                                    <p>We do NOT share your personal information with third parties except:</p>
-                                    <ul className="list-disc pl-6 mb-4">
-                                        <li>As required by law</li>
-                                        <li>With your explicit consent</li>
-                                        <li>With service providers (like Firebase) who help us operate the service</li>
-                                    </ul>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">5. Your Rights</h3>
-                                    <p>You have the right to:</p>
-                                    <ul className="list-disc pl-6 mb-4">
-                                        <li>Access your data</li>
-                                        <li>Delete your account and all associated data</li>
-                                        <li>Export your gang sheets</li>
-                                        <li>Opt-out of communications</li>
-                                    </ul>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">6. Cookies</h3>
-                                    <p>We use browser storage (localStorage) to maintain your session. No tracking cookies are used for advertising.</p>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">7. Children's Privacy</h3>
-                                    <p>Our service is not directed to children under 13. We do not knowingly collect information from children.</p>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">8. Changes to Privacy Policy</h3>
-                                    <p>We may update this policy. We will notify users of significant changes via email or in-app notification.</p>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">9. Contact Us</h3>
-                                    <p>For privacy questions, contact us through the Contact page.</p>
-                                </div>
-                                <button
-                                    onClick={() => setShowPrivacy(false)}
-                                    className="mt-6 w-full px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
-                                >
-                                    Close
-                                </button>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Terms of Service Modal */}
-                    {showTerms && (
-                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
-                            <div className="bg-white rounded-lg p-8 max-w-3xl w-full my-8">
-                                <div className="flex justify-between items-start mb-6">
-                                    <h2 className="text-3xl font-bold">Terms of Service</h2>
-                                    <button onClick={() => setShowTerms(false)} className="text-gray-500 hover:text-gray-700">
-                                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                        </svg>
-                                    </button>
-                                </div>
-                                <div className="prose max-w-none">
-                                    <p className="text-sm text-gray-600 mb-4">Last Updated: {new Date().toLocaleDateString()}</p>
-                                    
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">1. Acceptance of Terms</h3>
-                                    <p>By accessing and using Gang Sheet Generator ("the Service"), you accept and agree to be bound by these Terms of Service.</p>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">2. Description of Service</h3>
-                                    <p>Gang Sheet Generator is a free web-based tool that allows users to create, save, and export gang sheets for printing purposes.</p>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">3. User Accounts</h3>
-                                    <ul className="list-disc pl-6 mb-4">
-                                        <li>You must provide accurate information when creating an account</li>
-                                        <li>You are responsible for maintaining the security of your account</li>
-                                        <li>You are responsible for all activities under your account</li>
-                                        <li>You must notify us of any unauthorized use</li>
-                                    </ul>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">4. Acceptable Use</h3>
-                                    <p>You agree NOT to:</p>
-                                    <ul className="list-disc pl-6 mb-4">
-                                        <li>Use the Service for any illegal purpose</li>
-                                        <li>Violate any intellectual property rights</li>
-                                        <li>Upload malicious code or viruses</li>
-                                        <li>Attempt to gain unauthorized access to the Service</li>
-                                        <li>Use the Service to harm, harass, or impersonate others</li>
-                                    </ul>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">5. Intellectual Property</h3>
-                                    <ul className="list-disc pl-6 mb-4">
-                                        <li>You retain all rights to content you upload</li>
-                                        <li>CurioGraphicsYard owns the Service and its original content</li>
-                                        <li>You may not copy, modify, or distribute our code without permission</li>
-                                    </ul>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">6. Disclaimer of Warranties</h3>
-                                    <p>The Service is provided "AS IS" without warranties of any kind. We do not guarantee:</p>
-                                    <ul className="list-disc pl-6 mb-4">
-                                        <li>Uninterrupted or error-free operation</li>
-                                        <li>Accuracy of results</li>
-                                        <li>Fitness for a particular purpose</li>
-                                    </ul>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">7. Limitation of Liability</h3>
-                                    <p>CurioGraphicsYard shall not be liable for any indirect, incidental, special, consequential, or punitive damages arising from your use of the Service.</p>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">8. Modifications to Service</h3>
-                                    <p>We reserve the right to modify or discontinue the Service at any time, with or without notice.</p>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">9. Termination</h3>
-                                    <p>We may terminate or suspend your account at any time for violation of these Terms.</p>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">10. Governing Law</h3>
-                                    <p>These Terms shall be governed by the laws of the jurisdiction where CurioLabs is registered.</p>
-
-                                    <h3 className="text-xl font-semibold mt-6 mb-3">11. Contact</h3>
-                                    <p>For questions about these Terms, please use the Contact page.</p>
-                                </div>
-                                <button
-                                    onClick={() => setShowTerms(false)}
-                                    className="mt-6 w-full px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
-                                >
-                                    Close
-                                </button>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Contact Modal */}
-                    {showContact && (
-                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                            <div className="bg-white rounded-lg p-8 max-w-2xl w-full">
-                                <div className="flex justify-between items-start mb-6">
-                                    <h2 className="text-3xl font-bold">Contact Us</h2>
-                                    <button onClick={() => setShowContact(false)} className="text-gray-500 hover:text-gray-700">
-                                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                        </svg>
-                                    </button>
-                                </div>
-                                
-                                <div className="space-y-6">
-                                    <div>
-                                        <h3 className="text-xl font-semibold mb-3">Get in Touch</h3>
-                                        <p className="text-gray-600 mb-4">
-                                            We'd love to hear from you! Whether you have questions, feedback, or need support, 
-                                            we're here to help.
-                                        </p>
-                                    </div>
-
-                                    <div className="bg-gray-50 rounded-lg p-6">
-                                        <h4 className="font-semibold mb-3 flex items-center gap-2">
-                                            <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                                            </svg>
-                                            Email Support
-                                        </h4>
-                                        <a href="mailto:support@curiographicsyard.com" className="text-indigo-600 hover:text-indigo-700">
-                                            support@curiographicsyard.com
-                                        </a>
-                                        <p className="text-sm text-gray-600 mt-2">Response time: 24-48 hours</p>
-                                    </div>
-
-                                    <div className="bg-gray-50 rounded-lg p-6">
-                                        <h4 className="font-semibold mb-3 flex items-center gap-2">
-                                            <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                                            </svg>
-                                            Business Inquiries
-                                        </h4>
-                                        <a href="mailto:business@curiolabs.com" className="text-indigo-600 hover:text-indigo-700">
-                                            business@curiolabs.com
-                                        </a>
-                                        <p className="text-sm text-gray-600 mt-2">For partnerships and collaborations</p>
-                                    </div>
-
-                                    <div className="bg-gray-50 rounded-lg p-6">
-                                        <h4 className="font-semibold mb-3 flex items-center gap-2">
-                                            <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                                            </svg>
-                                            Social Media
-                                        </h4>
-                                        <div className="flex gap-4 mt-3">
-                                            <a href="#" className="text-gray-600 hover:text-indigo-600 transition">Twitter</a>
-                                            <a href="#" className="text-gray-600 hover:text-indigo-600 transition">Facebook</a>
-                                            <a href="#" className="text-gray-600 hover:text-indigo-600 transition">Instagram</a>
-                                        </div>
-                                    </div>
-
-                                    <div className="border-t pt-4">
-                                        <p className="text-sm text-gray-600 text-center">
-                                            <strong>CurioGraphicsYard</strong> is engineered by <strong>CurioLabs</strong><br />
-                                            Registered Trademark ®
-                                        </p>
-                                    </div>
-                                </div>
-
-                                <button
-                                    onClick={() => setShowContact(false)}
-                                    className="mt-6 w-full px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
-                                >
-                                    Close
-                                </button>
-                            </div>
-                        </div>
-                    )}
-                    
                     {/* Footer */}
                     <footer className="bg-gray-900 text-white mt-16">
                         <div className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
@@ -2007,17 +1599,15 @@
                                     <p className="mt-1">Engineered by <span className="text-indigo-400 font-semibold">CurioLabs</span> • Registered Trademark ®</p>
                                 </div>
                                 <div className="flex gap-4 text-sm text-gray-400">
-                                    <button onClick={() => setShowPrivacy(true)} className="hover:text-white transition">Privacy Policy</button>
+                                    <a href="#" className="hover:text-white transition">Privacy Policy</a>
                                     <span>•</span>
-                                    <button onClick={() => setShowTerms(true)} className="hover:text-white transition">Terms of Service</button>
+                                    <a href="#" className="hover:text-white transition">Terms of Service</a>
                                     <span>•</span>
-                                    <button onClick={() => setShowContact(true)} className="hover:text-white transition">Contact</button>
+                                    <a href="#" className="hover:text-white transition">Contact</a>
                                 </div>
                             </div>
                         </div>
                     </footer>
-                    </>
-                    )}
                 </div>
             );
         };
