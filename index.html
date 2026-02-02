@@ -1,0 +1,1194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gang Sheet Generator</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <style>
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+        }
+        .gang-sheet-preview {
+            background: white;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        }
+        .image-item {
+            background-size: contain;
+            background-repeat: no-repeat;
+            background-position: center;
+            border: 1px dashed #cbd5e1;
+        }
+        @media print {
+            body * {
+                visibility: hidden;
+            }
+            .gang-sheet-preview, .gang-sheet-preview * {
+                visibility: visible;
+            }
+            .gang-sheet-preview {
+                position: absolute;
+                left: 0;
+                top: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // Google OAuth Configuration
+        const GOOGLE_CLIENT_ID = "976539096202-ao5jiam8ap4ub71kg5auj2i6rtjm1gu9.apps.googleusercontent.com";
+
+        // Paper sizes in mm and pixels at 300 DPI
+        const PAPER_SIZES = {
+            A4: { width: 210, height: 297, widthPx: 2480, heightPx: 3508, label: 'A4 (210×297mm)' },
+            A3: { width: 297, height: 420, widthPx: 3508, heightPx: 4961, label: 'A3 (297×420mm)' },
+            A2: { width: 420, height: 594, widthPx: 4961, heightPx: 7016, label: 'A2 (420×594mm)' }
+        };
+
+        const GangSheetGenerator = () => {
+            const [user, setUser] = useState(null);
+            const [showAuth, setShowAuth] = useState(false);
+            const [activeTab, setActiveTab] = useState('generator');
+            
+            const [uploadedImage, setUploadedImage] = useState(null);
+            const [imageDataUrl, setImageDataUrl] = useState(null);
+            const [paperSize, setPaperSize] = useState('A4');
+            const [imageDimensions, setImageDimensions] = useState({ width: 100, height: 100 });
+            const [widthInput, setWidthInput] = useState('100');
+            const [heightInput, setHeightInput] = useState('100');
+            const [spacingInput, setSpacingInput] = useState('5');
+            const [savedSheets, setSavedSheets] = useState([]);
+            const [sheetName, setSheetName] = useState('');
+            const [autoFill, setAutoFill] = useState(false);
+            const [lockAspectRatio, setLockAspectRatio] = useState(true);
+            const [aspectRatio, setAspectRatio] = useState(1);
+            const [spacing, setSpacing] = useState(5);
+            const [unit, setUnit] = useState('mm'); // mm, cm, px, in
+            
+            // Multi-image support
+            const [images, setImages] = useState([]);
+            const [selectedImageIndex, setSelectedImageIndex] = useState(null);
+            
+            const exportCanvasRef = useRef(null);
+            const googleButtonRef = useRef(null);
+
+            // Unit conversion functions (all internal calculations are in mm)
+            const convertFromMM = (mm, targetUnit) => {
+                switch(targetUnit) {
+                    case 'cm': return mm / 10;
+                    case 'in': return mm / 25.4;
+                    case 'px': return (mm / 25.4) * 300; // 300 DPI
+                    default: return mm; // mm
+                }
+            };
+
+            const convertToMM = (value, fromUnit) => {
+                switch(fromUnit) {
+                    case 'cm': return value * 10;
+                    case 'in': return value * 25.4;
+                    case 'px': return (value / 300) * 25.4; // 300 DPI
+                    default: return value; // mm
+                }
+            };
+
+            const formatValue = (mmValue) => {
+                const converted = convertFromMM(mmValue, unit);
+                return String(Math.round(converted * 100) / 100);
+            };
+
+            const handleUnitChange = (newUnit) => {
+                // Convert current display values to new unit
+                setWidthInput(formatValue(imageDimensions.width));
+                setHeightInput(formatValue(imageDimensions.height));
+                setSpacingInput(formatValue(spacing));
+                setUnit(newUnit);
+            };
+
+            // Initialize Google Sign-In
+            useEffect(() => {
+                if (window.google && googleButtonRef.current) {
+                    window.google.accounts.id.initialize({
+                        client_id: GOOGLE_CLIENT_ID,
+                        callback: handleGoogleSignIn
+                    });
+                    
+                    window.google.accounts.id.renderButton(
+                        googleButtonRef.current,
+                        { 
+                            theme: "outline", 
+                            size: "large",
+                            width: 350,
+                            text: "continue_with"
+                        }
+                    );
+                }
+            }, [showAuth]);
+
+            // Load user from localStorage
+            useEffect(() => {
+                const savedUser = localStorage.getItem('gangsheet_user');
+                if (savedUser) {
+                    const userData = JSON.parse(savedUser);
+                    setUser(userData);
+                    loadSavedSheets(userData.email);
+                }
+            }, []);
+
+            const handleGoogleSignIn = (response) => {
+                // Decode JWT token to get user info
+                const payload = JSON.parse(atob(response.credential.split('.')[1]));
+                const userData = {
+                    email: payload.email,
+                    name: payload.name,
+                    picture: payload.picture,
+                    googleId: payload.sub
+                };
+                
+                // Check if user exists
+                const existingUser = localStorage.getItem(`user_${payload.email}`);
+                if (existingUser) {
+                    const existing = JSON.parse(existingUser);
+                    // Preserve any existing user data
+                    Object.assign(userData, existing);
+                }
+                
+                localStorage.setItem(`user_${payload.email}`, JSON.stringify(userData));
+                localStorage.setItem('gangsheet_user', JSON.stringify(userData));
+                setUser(userData);
+                loadSavedSheets(payload.email);
+                setShowAuth(false);
+            };
+
+            const loadSavedSheets = (userEmail) => {
+                const sheets = JSON.parse(localStorage.getItem(`gangsheet_saved_${userEmail}`) || '[]');
+                setSavedSheets(sheets);
+            };
+
+            const handleLogout = () => {
+                if (window.google) {
+                    window.google.accounts.id.disableAutoSelect();
+                }
+                setUser(null);
+                localStorage.removeItem('gangsheet_user');
+                setSavedSheets([]);
+                setActiveTab('generator');
+            };
+
+            const handleDonate = () => {
+                // In production, this would open a payment gateway (Stripe, PayPal, etc.)
+                alert('Thank you for considering a donation! 🙏\n\nThis would typically redirect to a payment processor like:\n• PayPal\n• Stripe\n• Buy Me a Coffee\n• Ko-fi\n\nYour support helps keep this tool free for everyone!');
+            };
+
+            const handleImageUpload = (e) => {
+                const file = e.target.files[0];
+                if (file && images.length < 5) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            const imageAspectRatio = img.width / img.height;
+                            const defaultWidth = 100; // in mm
+                            const defaultHeight = 100 / imageAspectRatio; // in mm
+                            
+                            const newImage = {
+                                id: Date.now(),
+                                dataUrl: event.target.result,
+                                imgElement: img,
+                                dimensions: { width: defaultWidth, height: defaultHeight },
+                                widthInput: formatValue(defaultWidth),
+                                heightInput: formatValue(defaultHeight),
+                                aspectRatio: imageAspectRatio,
+                                lockAspectRatio: true,
+                                count: 1
+                            };
+                            
+                            const updatedImages = [...images, newImage];
+                            setImages(updatedImages);
+                            setSelectedImageIndex(updatedImages.length - 1);
+                            
+                            setImageDataUrl(event.target.result);
+                            setUploadedImage(img);
+                            setImageDimensions({ width: defaultWidth, height: defaultHeight });
+                            setWidthInput(formatValue(defaultWidth));
+                            setHeightInput(formatValue(defaultHeight));
+                            setAspectRatio(imageAspectRatio);
+                            setLockAspectRatio(true);
+                        };
+                        img.src = event.target.result;
+                    };
+                    reader.readAsDataURL(file);
+                    
+                    e.target.value = '';
+                }
+            };
+
+            const handleWidthChange = (value) => {
+                setWidthInput(value);
+                const numValue = parseFloat(value);
+                
+                if (!isNaN(numValue) && numValue > 0) {
+                    const mmValue = convertToMM(numValue, unit);
+                    
+                    if (lockAspectRatio) {
+                        const newHeight = mmValue / aspectRatio;
+                        setImageDimensions({ width: mmValue, height: newHeight });
+                        setHeightInput(formatValue(newHeight));
+                    } else {
+                        setImageDimensions({ ...imageDimensions, width: mmValue });
+                    }
+                    
+                    if (selectedImageIndex !== null) {
+                        updateImageDimension(selectedImageIndex, 'width', value);
+                    }
+                }
+            };
+
+            const handleHeightChange = (value) => {
+                setHeightInput(value);
+                const numValue = parseFloat(value);
+                
+                if (!isNaN(numValue) && numValue > 0) {
+                    const mmValue = convertToMM(numValue, unit);
+                    
+                    if (lockAspectRatio) {
+                        const newWidth = mmValue * aspectRatio;
+                        setImageDimensions({ width: newWidth, height: mmValue });
+                        setWidthInput(formatValue(newWidth));
+                    } else {
+                        setImageDimensions({ ...imageDimensions, height: mmValue });
+                    }
+                    
+                    if (selectedImageIndex !== null) {
+                        updateImageDimension(selectedImageIndex, 'height', value);
+                    }
+                }
+            };
+
+            const updateImageDimension = (index, field, value) => {
+                const updatedImages = [...images];
+                const img = updatedImages[index];
+                const numValue = parseFloat(value);
+                
+                if (field === 'width') {
+                    img.widthInput = value;
+                    if (!isNaN(numValue) && numValue > 0) {
+                        if (img.lockAspectRatio) {
+                            const newHeight = numValue / img.aspectRatio;
+                            img.dimensions = { width: numValue, height: newHeight };
+                            img.heightInput = String(Math.round(newHeight * 100) / 100);
+                        } else {
+                            img.dimensions.width = numValue;
+                        }
+                    }
+                } else if (field === 'height') {
+                    img.heightInput = value;
+                    if (!isNaN(numValue) && numValue > 0) {
+                        if (img.lockAspectRatio) {
+                            const newWidth = numValue * img.aspectRatio;
+                            img.dimensions = { width: newWidth, height: numValue };
+                            img.widthInput = String(Math.round(newWidth * 100) / 100);
+                        } else {
+                            img.dimensions.height = numValue;
+                        }
+                    }
+                }
+                
+                setImages(updatedImages);
+            };
+
+            const selectImage = (index) => {
+                setSelectedImageIndex(index);
+                const img = images[index];
+                setImageDataUrl(img.dataUrl);
+                setUploadedImage(img.imgElement);
+                setImageDimensions(img.dimensions);
+                setWidthInput(img.widthInput);
+                setHeightInput(img.heightInput);
+                setAspectRatio(img.aspectRatio);
+                setLockAspectRatio(img.lockAspectRatio);
+            };
+
+            const removeImage = (index) => {
+                const updatedImages = images.filter((_, i) => i !== index);
+                setImages(updatedImages);
+                
+                if (selectedImageIndex === index) {
+                    if (updatedImages.length > 0) {
+                        selectImage(0);
+                    } else {
+                        setSelectedImageIndex(null);
+                        setUploadedImage(null);
+                        setImageDataUrl(null);
+                    }
+                } else if (selectedImageIndex > index) {
+                    setSelectedImageIndex(selectedImageIndex - 1);
+                }
+            };
+
+            const updateImageCount = (index, count) => {
+                const updatedImages = [...images];
+                updatedImages[index].count = Math.max(1, Math.min(100, count));
+                setImages(updatedImages);
+            };
+
+            const handleSpacingChange = (value) => {
+                setSpacingInput(value);
+                const numValue = parseFloat(value);
+                
+                if (!isNaN(numValue) && numValue >= 0) {
+                    const mmValue = convertToMM(numValue, unit);
+                    setSpacing(mmValue);
+                }
+            };
+
+            const toggleAspectRatioLock = () => {
+                if (!lockAspectRatio && uploadedImage) {
+                    // When locking, recalculate aspect ratio from current dimensions
+                    const currentAspectRatio = imageDimensions.width / imageDimensions.height;
+                    setAspectRatio(currentAspectRatio);
+                }
+                setLockAspectRatio(!lockAspectRatio);
+            };
+
+            const autoFillSheet = () => {
+                if (!uploadedImage || selectedImageIndex === null) return;
+                
+                const paper = PAPER_SIZES[paperSize];
+                const currentDimensions = imageDimensions;
+                
+                // Calculate how many copies fit on the sheet with current dimensions
+                const itemWidth = currentDimensions.width + spacing;
+                const itemHeight = currentDimensions.height + spacing;
+                
+                const cols = Math.floor(paper.width / itemWidth);
+                const rows = Math.floor(paper.height / itemHeight);
+                const totalCopies = cols * rows;
+                
+                if (totalCopies > 0) {
+                    // Update the count for the selected image
+                    const updatedImages = [...images];
+                    updatedImages[selectedImageIndex].count = totalCopies;
+                    setImages(updatedImages);
+                }
+                
+                setAutoFill(false);
+            };
+
+            const calculateLayout = () => {
+                if (images.length === 0) return [];
+                
+                const paper = PAPER_SIZES[paperSize];
+                const layout = [];
+                let currentX = 0;
+                let currentY = 0;
+                let rowHeight = 0;
+                
+                // Create array of all images with their counts
+                const allItems = [];
+                images.forEach(img => {
+                    for (let i = 0; i < img.count; i++) {
+                        allItems.push({
+                            dataUrl: img.dataUrl,
+                            imgElement: img.imgElement,
+                            width: img.dimensions.width,
+                            height: img.dimensions.height
+                        });
+                    }
+                });
+                
+                // Layout items left to right, top to bottom
+                allItems.forEach((item) => {
+                    const itemWidth = item.width + spacing;
+                    const itemHeight = item.height + spacing;
+                    
+                    // Check if item fits in current row
+                    if (currentX + itemWidth > paper.width && currentX > 0) {
+                        // Move to next row
+                        currentX = 0;
+                        currentY += rowHeight;
+                        rowHeight = 0;
+                    }
+                    
+                    // Check if item fits on paper
+                    if (currentY + itemHeight <= paper.height && currentX + itemWidth <= paper.width) {
+                        layout.push({
+                            x: currentX,
+                            y: currentY,
+                            width: item.width,
+                            height: item.height,
+                            dataUrl: item.dataUrl,
+                            imgElement: item.imgElement
+                        });
+                        
+                        currentX += itemWidth;
+                        rowHeight = Math.max(rowHeight, itemHeight);
+                    }
+                });
+                
+                return layout;
+            };
+
+            const layout = calculateLayout();
+            const paper = PAPER_SIZES[paperSize];
+
+            const exportSheet = async (format) => {
+                const exportCanvas = exportCanvasRef.current;
+                const ctx = exportCanvas.getContext('2d');
+                
+                // Set canvas to 300 DPI
+                exportCanvas.width = paper.widthPx;
+                exportCanvas.height = paper.heightPx;
+                
+                // Fill white background
+                ctx.fillStyle = 'white';
+                ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+                
+                // Draw images with spacing
+                layout.forEach(item => {
+                    const x = (item.x / paper.width) * paper.widthPx;
+                    const y = (item.y / paper.height) * paper.heightPx;
+                    const width = (item.width / paper.width) * paper.widthPx;
+                    const height = (item.height / paper.height) * paper.heightPx;
+                    
+                    ctx.drawImage(item.imgElement, x, y, width, height);
+                });
+
+                if (format === 'PDF') {
+                    const { jsPDF } = window.jspdf;
+                    const pdf = new jsPDF({
+                        orientation: paper.width > paper.height ? 'landscape' : 'portrait',
+                        unit: 'mm',
+                        format: [paper.width, paper.height]
+                    });
+                    
+                    const imgData = exportCanvas.toDataURL('image/jpeg', 1.0);
+                    pdf.addImage(imgData, 'JPEG', 0, 0, paper.width, paper.height);
+                    pdf.save(`gang-sheet-${paperSize}.pdf`);
+                } else if (format === 'PNG') {
+                    exportCanvas.toBlob((blob) => {
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `gang-sheet-${paperSize}.png`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                    }, 'image/png');
+                } else if (format === 'JPEG') {
+                    exportCanvas.toBlob((blob) => {
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `gang-sheet-${paperSize}.jpg`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                    }, 'image/jpeg', 1.0);
+                }
+            };
+
+            const saveSheet = () => {
+                if (!user) {
+                    alert('Please log in to save gang sheets');
+                    setShowAuth(true);
+                    return;
+                }
+                
+                const name = sheetName || `Gang Sheet ${new Date().toLocaleDateString()}`;
+                const sheetData = {
+                    id: Date.now(),
+                    name,
+                    paperSize,
+                    imageDimensions,
+                    imageDataUrl,
+                    createdAt: new Date().toISOString()
+                };
+                
+                const updatedSheets = [...savedSheets, sheetData];
+                setSavedSheets(updatedSheets);
+                localStorage.setItem(`gangsheet_saved_${user.email}`, JSON.stringify(updatedSheets));
+                setSheetName('');
+                alert('Gang sheet saved successfully!');
+            };
+
+            const loadSheet = (sheet) => {
+                setPaperSize(sheet.paperSize);
+                setImageDimensions(sheet.imageDimensions);
+                setWidthInput(String(Math.round(sheet.imageDimensions.width * 100) / 100));
+                setHeightInput(String(Math.round(sheet.imageDimensions.height * 100) / 100));
+                setImageDataUrl(sheet.imageDataUrl);
+                
+                const img = new Image();
+                img.src = sheet.imageDataUrl;
+                img.onload = () => {
+                    const imageAspectRatio = img.width / img.height;
+                    setAspectRatio(imageAspectRatio);
+                    setUploadedImage(img);
+                };
+                
+                setActiveTab('generator');
+            };
+
+            const deleteSheet = (id) => {
+                if (confirm('Are you sure you want to delete this gang sheet?')) {
+                    const updatedSheets = savedSheets.filter(s => s.id !== id);
+                    setSavedSheets(updatedSheets);
+                    localStorage.setItem(`gangsheet_saved_${user.email}`, JSON.stringify(updatedSheets));
+                }
+            };
+
+            const clearAll = () => {
+                setUploadedImage(null);
+                setImageDataUrl(null);
+                setPaperSize('A4');
+                setImageDimensions({ width: 100, height: 100 });
+                setWidthInput('100');
+                setHeightInput('100');
+                setSpacingInput('5');
+                setSpacing(5);
+                setSheetName('');
+                setLockAspectRatio(true);
+                setAspectRatio(1);
+                setImages([]);
+                setSelectedImageIndex(null);
+                
+                // Reset file input
+                const fileInput = document.querySelector('input[type="file"]');
+                if (fileInput) {
+                    fileInput.value = '';
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+                    {/* Header */}
+                    <header className="bg-white shadow-sm">
+                        <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8 flex justify-between items-center">
+                            <h1 className="text-2xl font-bold text-gray-900">Gang Sheet Generator</h1>
+                            <div className="flex items-center gap-4">
+                                {user ? (
+                                    <>
+                                        <button
+                                            onClick={handleDonate}
+                                            className="px-4 py-2 text-sm font-medium text-white bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 rounded-lg transition flex items-center gap-2"
+                                        >
+                                            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                                <path fillRule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clipRule="evenodd" />
+                                            </svg>
+                                            Donate
+                                        </button>
+                                        <div className="flex items-center gap-3">
+                                            <img 
+                                                src={user.picture || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name || user.email)}`} 
+                                                alt="Profile" 
+                                                className="w-8 h-8 rounded-full"
+                                            />
+                                            <span className="text-sm text-gray-700">{user.name || user.email}</span>
+                                        </div>
+                                        <button
+                                            onClick={handleLogout}
+                                            className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg transition"
+                                        >
+                                            Logout
+                                        </button>
+                                    </>
+                                ) : (
+                                    <button
+                                        onClick={() => setShowAuth(true)}
+                                        className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition"
+                                    >
+                                        Sign In
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Tab Navigation */}
+                        {user && (
+                            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                                <div className="flex border-b border-gray-200">
+                                    <button
+                                        onClick={() => setActiveTab('generator')}
+                                        className={`px-6 py-3 text-sm font-medium border-b-2 transition ${
+                                            activeTab === 'generator'
+                                                ? 'border-indigo-600 text-indigo-600'
+                                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                                        }`}
+                                    >
+                                        Generator
+                                    </button>
+                                    <button
+                                        onClick={() => setActiveTab('saved')}
+                                        className={`px-6 py-3 text-sm font-medium border-b-2 transition ${
+                                            activeTab === 'saved'
+                                                ? 'border-indigo-600 text-indigo-600'
+                                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                                        }`}
+                                    >
+                                        Saved Sheets ({savedSheets.length})
+                                    </button>
+                                    <button
+                                        onClick={() => setActiveTab('profile')}
+                                        className={`px-6 py-3 text-sm font-medium border-b-2 transition ${
+                                            activeTab === 'profile'
+                                                ? 'border-indigo-600 text-indigo-600'
+                                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                                        }`}
+                                    >
+                                        Profile
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </header>
+
+                    {/* Auth Modal */}
+                    {showAuth && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                            <div className="bg-white rounded-lg p-8 max-w-md w-full">
+                                <h2 className="text-2xl font-bold mb-6 text-center">Sign in to continue</h2>
+                                <div ref={googleButtonRef} className="flex justify-center mb-4"></div>
+                                <button
+                                    onClick={() => setShowAuth(false)}
+                                    className="w-full mt-4 px-4 py-2 text-sm text-gray-600 hover:text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition"
+                                >
+                                    Cancel
+                                </button>
+                                <p className="mt-4 text-xs text-gray-500 text-center">
+                                    Note: For demo purposes, replace GOOGLE_CLIENT_ID in the code with your actual Google OAuth client ID
+                                </p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Main Content */}
+                    <div className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
+                        {/* Generator Tab */}
+                        {(!user || activeTab === 'generator') && (
+                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                                {/* Left Panel - Controls */}
+                                <div className="lg:col-span-1 space-y-6">
+                                    {/* Upload Section */}
+                                    <div className="bg-white rounded-lg shadow-md p-6">
+                                        <div className="flex items-center justify-between mb-4">
+                                            <h3 className="text-lg font-semibold">Upload Images ({images.length}/5)</h3>
+                                            {images.length > 0 && (
+                                                <button
+                                                    onClick={clearAll}
+                                                    className="px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition flex items-center gap-1"
+                                                    title="Clear all and start over"
+                                                >
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                                    </svg>
+                                                    Clear All
+                                                </button>
+                                            )}
+                                        </div>
+                                        
+                                        {/* Multi-image thumbnails */}
+                                        {images.length > 0 && (
+                                            <div className="mb-4 space-y-2">
+                                                {images.map((img, index) => (
+                                                    <div 
+                                                        key={img.id}
+                                                        className={`p-3 rounded-lg border-2 cursor-pointer transition ${
+                                                            selectedImageIndex === index 
+                                                                ? 'border-indigo-500 bg-indigo-50' 
+                                                                : 'border-gray-200 hover:border-gray-300'
+                                                        }`}
+                                                        onClick={() => selectImage(index)}
+                                                    >
+                                                        <div className="flex items-center gap-3">
+                                                            <img 
+                                                                src={img.dataUrl} 
+                                                                alt={`Image ${index + 1}`}
+                                                                className="w-12 h-12 object-contain bg-white rounded border"
+                                                            />
+                                                            <div className="flex-1 min-w-0">
+                                                                <p className="text-sm font-medium truncate">Image {index + 1}</p>
+                                                                <p className="text-xs text-gray-500">
+                                                                    {Math.round(img.dimensions.width)}×{Math.round(img.dimensions.height)}mm
+                                                                </p>
+                                                            </div>
+                                                            <div className="flex items-center gap-2">
+                                                                <div className="flex items-center gap-1">
+                                                                    <button
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            updateImageCount(index, img.count - 1);
+                                                                        }}
+                                                                        className="w-6 h-6 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-xs font-bold"
+                                                                    >
+                                                                        -
+                                                                    </button>
+                                                                    <span className="text-xs font-medium w-6 text-center">{img.count}</span>
+                                                                    <button
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            updateImageCount(index, img.count + 1);
+                                                                        }}
+                                                                        className="w-6 h-6 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-xs font-bold"
+                                                                    >
+                                                                        +
+                                                                    </button>
+                                                                </div>
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        removeImage(index);
+                                                                    }}
+                                                                    className="w-6 h-6 flex items-center justify-center text-red-600 hover:bg-red-50 rounded"
+                                                                >
+                                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                                                    </svg>
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                        
+                                        <label className={`block ${images.length >= 5 ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                                            <div className={`border-2 border-dashed rounded-lg p-8 text-center transition ${
+                                                images.length >= 5 
+                                                    ? 'border-gray-200 bg-gray-50 cursor-not-allowed'
+                                                    : imageDataUrl 
+                                                    ? 'border-indigo-300 bg-indigo-50 cursor-pointer' 
+                                                    : 'border-gray-300 hover:border-indigo-500 cursor-pointer'
+                                            }`}>
+                                                <svg className="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                                                    <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                                </svg>
+                                                <p className="mt-2 text-sm text-gray-600">
+                                                    {images.length >= 5 
+                                                        ? 'Maximum 5 images reached'
+                                                        : images.length > 0
+                                                        ? 'Click to add another image'
+                                                        : 'Click to upload PNG, PDF, or other image'}
+                                                </p>
+                                            </div>
+                                            <input
+                                                type="file"
+                                                accept="image/*,.pdf"
+                                                onChange={handleImageUpload}
+                                                className="hidden"
+                                                disabled={images.length >= 5}
+                                            />
+                                        </label>
+                                    </div>
+
+                                    {/* Paper Size */}
+                                    <div className="bg-white rounded-lg shadow-md p-6">
+                                        <h3 className="text-lg font-semibold mb-4">Paper Size</h3>
+                                        <div className="space-y-2">
+                                            {Object.entries(PAPER_SIZES).map(([key, size]) => (
+                                                <button
+                                                    key={key}
+                                                    onClick={() => setPaperSize(key)}
+                                                    className={`w-full px-4 py-2 rounded-lg text-left transition ${
+                                                        paperSize === key
+                                                            ? 'bg-indigo-600 text-white'
+                                                            : 'bg-gray-100 hover:bg-gray-200'
+                                                    }`}
+                                                >
+                                                    <span>{size.label}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* Image Dimensions */}
+                                    {uploadedImage && (
+                                        <div className="bg-white rounded-lg shadow-md p-6">
+                                            <div className="flex items-center justify-between mb-4">
+                                                <h3 className="text-lg font-semibold">
+                                                    {selectedImageIndex !== null 
+                                                        ? `Image ${selectedImageIndex + 1} Dimensions` 
+                                                        : 'Image Dimensions'}
+                                                </h3>
+                                                <button
+                                                    onClick={toggleAspectRatioLock}
+                                                    className={`p-2 rounded-lg transition ${
+                                                        lockAspectRatio 
+                                                            ? 'bg-indigo-100 text-indigo-600' 
+                                                            : 'bg-gray-100 text-gray-400'
+                                                    }`}
+                                                    title={lockAspectRatio ? 'Aspect ratio locked' : 'Aspect ratio unlocked'}
+                                                >
+                                                    {lockAspectRatio ? (
+                                                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                                                        </svg>
+                                                    ) : (
+                                                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
+                                                        </svg>
+                                                    )}
+                                                </button>
+                                            </div>
+                                            
+                                            {/* Unit Selector */}
+                                            <div className="mb-4">
+                                                <label className="block text-sm font-medium text-gray-700 mb-2">Unit</label>
+                                                <div className="grid grid-cols-4 gap-2">
+                                                    {['mm', 'cm', 'in', 'px'].map((unitOption) => (
+                                                        <button
+                                                            key={unitOption}
+                                                            onClick={() => handleUnitChange(unitOption)}
+                                                            className={`px-3 py-2 text-sm font-medium rounded-lg transition ${
+                                                                unit === unitOption
+                                                                    ? 'bg-indigo-600 text-white'
+                                                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                                            }`}
+                                                        >
+                                                            {unitOption}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                            <div className="space-y-4">
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                        Width ({unit})
+                                                    </label>
+                                                    <input
+                                                        type="text"
+                                                        inputMode="decimal"
+                                                        value={widthInput}
+                                                        onChange={(e) => handleWidthChange(e.target.value)}
+                                                        className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                                        placeholder={`Width in ${unit}`}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                        Height ({unit})
+                                                    </label>
+                                                    <input
+                                                        type="text"
+                                                        inputMode="decimal"
+                                                        value={heightInput}
+                                                        onChange={(e) => handleHeightChange(e.target.value)}
+                                                        className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                                        placeholder={`Height in ${unit}`}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                        Spacing ({unit})
+                                                    </label>
+                                                    <input
+                                                        type="text"
+                                                        inputMode="decimal"
+                                                        value={spacingInput}
+                                                        onChange={(e) => handleSpacingChange(e.target.value)}
+                                                        className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                                        placeholder={`Spacing in ${unit}`}
+                                                    />
+                                                </div>
+                                                <div className="pt-2 border-t">
+                                                    <p className="text-sm text-gray-600 mb-3">
+                                                        Total items on sheet: <strong>{layout.length}</strong>
+                                                        {images.length > 1 && (
+                                                            <span className="text-xs text-gray-500 ml-2">
+                                                                ({images.length} different images)
+                                                            </span>
+                                                        )}
+                                                    </p>
+                                                    <button
+                                                        onClick={autoFillSheet}
+                                                        className="w-full px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-lg hover:from-purple-700 hover:to-indigo-700 transition flex items-center justify-center gap-2"
+                                                    >
+                                                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1H5a1 1 0 01-1-1v-3zM14 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1h-4a1 1 0 01-1-1v-3z" />
+                                                        </svg>
+                                                        Fill Sheet
+                                                    </button>
+                                                    <p className="text-xs text-gray-500 mt-2 text-center">
+                                                        Fill the sheet with this image at current dimensions
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Export */}
+                                    {uploadedImage && (
+                                        <div className="bg-white rounded-lg shadow-md p-6">
+                                            <h3 className="text-lg font-semibold mb-4">Export (300 DPI)</h3>
+                                            <div className="space-y-2">
+                                                <button
+                                                    onClick={() => exportSheet('JPEG')}
+                                                    className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition"
+                                                >
+                                                    Export as JPEG
+                                                </button>
+                                                <button
+                                                    onClick={() => exportSheet('PDF')}
+                                                    className="w-full px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition"
+                                                >
+                                                    Export as PDF
+                                                </button>
+                                                <button
+                                                    onClick={() => exportSheet('PNG')}
+                                                    className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                                                >
+                                                    Export as PNG
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Save Sheet */}
+                                    {uploadedImage && (
+                                        <div className="bg-white rounded-lg shadow-md p-6">
+                                            <h3 className="text-lg font-semibold mb-4">Save Gang Sheet</h3>
+                                            <input
+                                                type="text"
+                                                placeholder="Sheet name (optional)"
+                                                value={sheetName}
+                                                onChange={(e) => setSheetName(e.target.value)}
+                                                className="w-full px-4 py-2 border rounded-lg mb-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                            />
+                                            <button
+                                                onClick={saveSheet}
+                                                className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
+                                            >
+                                                Save Sheet
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Middle & Right Panel - Preview */}
+                                <div className="lg:col-span-2">
+                                    <div className="bg-white rounded-lg shadow-md p-6">
+                                        <div className="flex items-center justify-between mb-4">
+                                            <h3 className="text-lg font-semibold">Preview</h3>
+                                            {images.length > 0 && (
+                                                <span className="px-3 py-1 bg-indigo-100 text-indigo-700 text-sm font-medium rounded-full">
+                                                    {PAPER_SIZES[paperSize].label}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div className="flex justify-center">
+                                            <div
+                                                className="gang-sheet-preview relative"
+                                                style={{
+                                                    width: '600px',
+                                                    height: `${(paper.height / paper.width) * 600}px`,
+                                                    maxHeight: '800px'
+                                                }}
+                                            >
+                                                {layout.length > 0 && layout.map((item, index) => (
+                                                    <div
+                                                        key={index}
+                                                        className="image-item absolute"
+                                                        style={{
+                                                            left: `${(item.x / paper.width) * 100}%`,
+                                                            top: `${(item.y / paper.height) * 100}%`,
+                                                            width: `${(item.width / paper.width) * 100}%`,
+                                                            height: `${(item.height / paper.height) * 100}%`,
+                                                            backgroundImage: `url(${item.dataUrl})`
+                                                        }}
+                                                    />
+                                                ))}
+                                                {layout.length === 0 && (
+                                                    <div className="flex items-center justify-center h-full text-gray-400">
+                                                        <div className="text-center">
+                                                            <svg className="mx-auto h-16 w-16 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                                            </svg>
+                                                            <p>Upload images to see preview</p>
+                                                            <p className="text-sm mt-1">Current size: {PAPER_SIZES[paperSize].label}</p>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                        {layout.length > 0 && (
+                                            <p className="text-sm text-gray-600 text-center mt-4">
+                                                Total items on sheet: <strong>{layout.length}</strong>
+                                            </p>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Saved Sheets Tab */}
+                        {user && activeTab === 'saved' && (
+                            <div className="max-w-5xl mx-auto">
+                                <div className="bg-white rounded-lg shadow-md p-6">
+                                    <h2 className="text-2xl font-bold mb-6">Saved Gang Sheets</h2>
+                                    {savedSheets.length === 0 ? (
+                                        <div className="text-center py-12">
+                                            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                            </svg>
+                                            <p className="mt-4 text-gray-600">No saved gang sheets yet</p>
+                                            <button
+                                                onClick={() => setActiveTab('generator')}
+                                                className="mt-4 px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
+                                            >
+                                                Create Your First Sheet
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                            {savedSheets.map((sheet) => (
+                                                <div key={sheet.id} className="border rounded-lg overflow-hidden hover:shadow-lg transition">
+                                                    <div className="aspect-[210/297] bg-gray-100 relative overflow-hidden">
+                                                        {sheet.imageDataUrl && (
+                                                            <img 
+                                                                src={sheet.imageDataUrl} 
+                                                                alt={sheet.name}
+                                                                className="w-full h-full object-contain p-4"
+                                                            />
+                                                        )}
+                                                    </div>
+                                                    <div className="p-4">
+                                                        <h3 className="font-semibold text-lg mb-2 truncate">{sheet.name}</h3>
+                                                        <p className="text-sm text-gray-600 mb-3">
+                                                            {sheet.paperSize} • {new Date(sheet.createdAt).toLocaleDateString()}
+                                                        </p>
+                                                        <div className="flex gap-2">
+                                                            <button
+                                                                onClick={() => loadSheet(sheet)}
+                                                                className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition text-sm"
+                                                            >
+                                                                Load
+                                                            </button>
+                                                            <button
+                                                                onClick={() => deleteSheet(sheet.id)}
+                                                                className="px-3 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition text-sm"
+                                                            >
+                                                                Delete
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Profile Tab */}
+                        {user && activeTab === 'profile' && (
+                            <div className="max-w-2xl mx-auto">
+                                <div className="bg-white rounded-lg shadow-md p-8">
+                                    <h2 className="text-2xl font-bold mb-6">Profile</h2>
+                                    
+                                    <div className="flex items-center gap-6 mb-8">
+                                        <img 
+                                            src={user.picture || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name || user.email)}&size=128`} 
+                                            alt="Profile" 
+                                            className="w-24 h-24 rounded-full border-4 border-gray-200"
+                                        />
+                                        <div>
+                                            <h3 className="text-xl font-semibold">{user.name || 'User'}</h3>
+                                            <p className="text-gray-600">{user.email}</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="border-t pt-6">
+                                        <h3 className="text-lg font-semibold mb-4">Account Statistics</h3>
+                                        <div className="grid grid-cols-2 gap-4 mb-6">
+                                            <div className="bg-gray-50 rounded-lg p-4">
+                                                <p className="text-sm text-gray-600">Total Gang Sheets</p>
+                                                <p className="text-2xl font-bold text-indigo-600">{savedSheets.length}</p>
+                                            </div>
+                                            <div className="bg-gray-50 rounded-lg p-4">
+                                                <p className="text-sm text-gray-600">Member Since</p>
+                                                <p className="text-2xl font-bold text-indigo-600">2024</p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="border-t pt-6">
+                                        <h3 className="text-lg font-semibold mb-4">Support This Project</h3>
+                                        <div className="bg-gradient-to-r from-pink-50 to-rose-50 rounded-lg p-6">
+                                            <div className="flex items-start gap-4 mb-4">
+                                                <div className="bg-white p-3 rounded-full">
+                                                    <svg className="w-8 h-8 text-pink-500" fill="currentColor" viewBox="0 0 20 20">
+                                                        <path fillRule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clipRule="evenodd" />
+                                                    </svg>
+                                                </div>
+                                                <div className="flex-1">
+                                                    <h4 className="font-semibold text-lg mb-2">Help Keep This Tool Free</h4>
+                                                    <p className="text-gray-700 text-sm mb-4">
+                                                        This gang sheet generator is completely free to use with all features unlocked. 
+                                                        If you find it helpful, consider supporting its development and maintenance with a donation.
+                                                    </p>
+                                                    <ul className="space-y-2 mb-4 text-sm">
+                                                        <li className="flex items-center gap-2">
+                                                            <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                                            </svg>
+                                                            <span>No paywalls or restrictions</span>
+                                                        </li>
+                                                        <li className="flex items-center gap-2">
+                                                            <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                                            </svg>
+                                                            <span>All paper sizes available</span>
+                                                        </li>
+                                                        <li className="flex items-center gap-2">
+                                                            <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                                            </svg>
+                                                            <span>Export in JPEG, PDF, and PNG</span>
+                                                        </li>
+                                                        <li className="flex items-center gap-2">
+                                                            <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                                            </svg>
+                                                            <span>Regular updates and improvements</span>
+                                                        </li>
+                                                    </ul>
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={handleDonate}
+                                                className="w-full px-6 py-3 bg-gradient-to-r from-pink-500 to-rose-500 text-white font-semibold rounded-lg hover:from-pink-600 hover:to-rose-600 transition flex items-center justify-center gap-2"
+                                            >
+                                                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                                    <path fillRule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clipRule="evenodd" />
+                                                </svg>
+                                                Support with a Donation
+                                            </button>
+                                            <p className="text-xs text-gray-600 mt-3 text-center">
+                                                Every donation helps cover hosting costs and supports future development
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Hidden canvas for export */}
+                    <canvas ref={exportCanvasRef} style={{ display: 'none' }} />
+                </div>
+            );
+        };
+
+        ReactDOM.render(<GangSheetGenerator />, document.getElementById('root'));
+    </script>
+</body>
+</html>
