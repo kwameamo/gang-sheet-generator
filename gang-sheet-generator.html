@@ -65,14 +65,25 @@
 
         // Initialize Firebase
         let auth, db;
+        let firebaseInitialized = false;
+        
         try {
-            if (!firebase.apps.length) {
-                firebase.initializeApp(firebaseConfig);
+            // Check if Firebase config has been updated
+            if (firebaseConfig.apiKey === "YOUR_FIREBASE_API_KEY") {
+                console.warn("Firebase config not set. Using localStorage fallback.");
+                firebaseInitialized = false;
+            } else {
+                if (!firebase.apps.length) {
+                    firebase.initializeApp(firebaseConfig);
+                }
+                auth = firebase.auth();
+                db = firebase.firestore();
+                firebaseInitialized = true;
+                console.log("Firebase initialized successfully");
             }
-            auth = firebase.auth();
-            db = firebase.firestore();
         } catch (error) {
             console.error("Firebase initialization error:", error);
+            firebaseInitialized = false;
         }
 
         // Paper sizes in mm and pixels at 300 DPI
@@ -146,7 +157,20 @@
 
             // Firebase authentication state listener
             useEffect(() => {
-                if (!auth) return;
+                if (!firebaseInitialized || !auth) {
+                    // Firebase not configured, use localStorage fallback
+                    const savedUser = localStorage.getItem('gangsheet_user');
+                    if (savedUser) {
+                        try {
+                            const userData = JSON.parse(savedUser);
+                            setUser(userData);
+                            loadSavedSheetsLocal(userData.email);
+                        } catch (error) {
+                            console.error("Error loading saved user:", error);
+                        }
+                    }
+                    return;
+                }
                 
                 const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
                     if (firebaseUser) {
@@ -168,23 +192,93 @@
             }, []);
 
             const handleGoogleSignIn = async () => {
-                if (!auth) {
-                    alert("Firebase not initialized. Please check your configuration.");
+                if (!firebaseInitialized || !auth) {
+                    // Firebase not configured - offer demo mode
+                    const useDemoMode = confirm(
+                        "Firebase is not configured yet.\n\n" +
+                        "To use Google Sign-In:\n" +
+                        "1. Create a Firebase project\n" +
+                        "2. Enable Google Authentication\n" +
+                        "3. Copy your Firebase config into the HTML file\n\n" +
+                        "See FIREBASE_SETUP_DETAILED.md for instructions.\n\n" +
+                        "Would you like to continue in DEMO MODE?\n" +
+                        "(Your data will be saved locally in your browser)"
+                    );
+                    
+                    if (useDemoMode) {
+                        // Create demo user
+                        const demoUser = {
+                            email: 'demo@gangsheet.app',
+                            name: 'Demo User',
+                            picture: 'https://ui-avatars.com/api/?name=Demo+User&background=6366f1&color=fff',
+                            isDemo: true
+                        };
+                        setUser(demoUser);
+                        localStorage.setItem('gangsheet_user', JSON.stringify(demoUser));
+                        loadSavedSheetsLocal(demoUser.email);
+                    }
+                    
+                    setShowAuth(false);
                     return;
                 }
                 
                 try {
                     const provider = new firebase.auth.GoogleAuthProvider();
-                    await auth.signInWithPopup(provider);
+                    
+                    // Add scopes for profile and email
+                    provider.addScope('profile');
+                    provider.addScope('email');
+                    
+                    // Force account selection
+                    provider.setCustomParameters({
+                        prompt: 'select_account'
+                    });
+                    
+                    console.log("Attempting sign-in...");
+                    const result = await auth.signInWithPopup(provider);
+                    console.log("Sign in successful:", result.user.email);
                     setShowAuth(false);
+                    
                 } catch (error) {
-                    console.error("Sign in error:", error);
-                    alert("Failed to sign in. Please try again.");
+                    console.error("Sign in error details:", error);
+                    let errorMessage = "Failed to sign in.\n\n";
+                    
+                    if (error.code === 'auth/popup-blocked') {
+                        errorMessage += "Your browser blocked the pop-up window.\n\nSolution: Allow pop-ups for this site in your browser settings.";
+                    } else if (error.code === 'auth/popup-closed-by-user') {
+                        // User closed popup - don't show error
+                        return;
+                    } else if (error.code === 'auth/unauthorized-domain') {
+                        errorMessage += "This domain is not authorized in Firebase.\n\nSolution:\n1. Go to Firebase Console\n2. Authentication → Settings → Authorized domains\n3. Add this domain: " + window.location.hostname;
+                    } else if (error.code === 'auth/operation-not-allowed') {
+                        errorMessage += "Google sign-in is not enabled in Firebase.\n\nSolution:\n1. Go to Firebase Console\n2. Authentication → Sign-in method\n3. Enable Google provider";
+                    } else if (error.code === 'auth/configuration-not-found') {
+                        errorMessage += "Firebase configuration is incorrect.\n\nPlease check:\n1. Your Firebase config is copied correctly\n2. All fields are filled in\n3. No typos in the config";
+                    } else if (error.code === 'auth/network-request-failed') {
+                        errorMessage += "Network error. Please check your internet connection.";
+                    } else {
+                        errorMessage += "Error: " + (error.message || "Unknown error") + "\n\nPlease check the browser console (F12) for more details.";
+                    }
+                    
+                    alert(errorMessage);
+                }
+            };
+
+            // LocalStorage fallback functions
+            const loadSavedSheetsLocal = (userEmail) => {
+                try {
+                    const sheets = JSON.parse(localStorage.getItem(`gangsheet_saved_${userEmail}`) || '[]');
+                    setSavedSheets(sheets);
+                } catch (error) {
+                    console.error("Error loading local sheets:", error);
+                    setSavedSheets([]);
                 }
             };
 
             const loadSavedSheets = async (userId) => {
-                if (!db) return;
+                if (!firebaseInitialized || !db) {
+                    return;
+                }
                 
                 try {
                     const sheetsRef = db.collection('users').doc(userId).collection('gangSheets');
@@ -201,7 +295,25 @@
             };
 
             const handleLogout = async () => {
-                if (!auth) return;
+                if (user && user.isDemo) {
+                    // Demo mode logout
+                    if (confirm('Log out of demo mode?\n\nYour locally saved gang sheets will remain available.')) {
+                        setUser(null);
+                        localStorage.removeItem('gangsheet_user');
+                        setSavedSheets([]);
+                        setActiveTab('generator');
+                    }
+                    return;
+                }
+                
+                if (!firebaseInitialized || !auth) {
+                    // LocalStorage mode logout
+                    setUser(null);
+                    localStorage.removeItem('gangsheet_user');
+                    setSavedSheets([]);
+                    setActiveTab('generator');
+                    return;
+                }
                 
                 try {
                     await auth.signOut();
@@ -210,6 +322,7 @@
                     setActiveTab('generator');
                 } catch (error) {
                     console.error("Logout error:", error);
+                    alert("Failed to log out. Please try again.");
                 }
             };
 
@@ -592,11 +705,6 @@
                     return;
                 }
                 
-                if (!db) {
-                    alert('Database not available. Please check your Firebase configuration.');
-                    return;
-                }
-                
                 const name = sheetName || `Gang Sheet ${new Date().toLocaleDateString()}`;
                 const sheetData = {
                     name,
@@ -606,7 +714,7 @@
                     spacing,
                     margin,
                     unit,
-                    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    createdAt: new Date().toISOString(),
                     images: images.map(img => ({
                         dataUrl: img.dataUrl,
                         dimensions: img.dimensions,
@@ -616,14 +724,37 @@
                     }))
                 };
                 
+                if (firebaseInitialized && db) {
+                    // Save to Firebase
+                    try {
+                        sheetData.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+                        await db.collection('users').doc(user.uid).collection('gangSheets').add(sheetData);
+                        setSheetName('');
+                        alert('Gang sheet saved to cloud successfully!');
+                        await loadSavedSheets(user.uid);
+                    } catch (error) {
+                        console.error("Error saving to Firebase:", error);
+                        alert('Failed to save to cloud. Saving locally instead.');
+                        saveSheetLocal(sheetData);
+                    }
+                } else {
+                    // Save to localStorage
+                    saveSheetLocal(sheetData);
+                }
+            };
+
+            const saveSheetLocal = (sheetData) => {
                 try {
-                    await db.collection('users').doc(user.uid).collection('gangSheets').add(sheetData);
+                    sheetData.id = Date.now();
+                    const sheets = JSON.parse(localStorage.getItem(`gangsheet_saved_${user.email}`) || '[]');
+                    sheets.push(sheetData);
+                    localStorage.setItem(`gangsheet_saved_${user.email}`, JSON.stringify(sheets));
+                    setSavedSheets(sheets);
                     setSheetName('');
-                    alert('Gang sheet saved successfully!');
-                    await loadSavedSheets(user.uid);
+                    alert('Gang sheet saved locally!');
                 } catch (error) {
-                    console.error("Error saving sheet:", error);
-                    alert('Failed to save gang sheet. Please try again.');
+                    console.error("Error saving locally:", error);
+                    alert('Failed to save gang sheet.');
                 }
             };
 
@@ -647,14 +778,28 @@
 
             const deleteSheet = async (id) => {
                 if (!confirm('Are you sure you want to delete this gang sheet?')) return;
-                if (!user || !db) return;
+                if (!user) return;
                 
-                try {
-                    await db.collection('users').doc(user.uid).collection('gangSheets').doc(id).delete();
-                    await loadSavedSheets(user.uid);
-                } catch (error) {
-                    console.error("Error deleting sheet:", error);
-                    alert('Failed to delete gang sheet. Please try again.');
+                if (firebaseInitialized && db && !user.isDemo) {
+                    // Delete from Firebase
+                    try {
+                        await db.collection('users').doc(user.uid).collection('gangSheets').doc(id).delete();
+                        await loadSavedSheets(user.uid);
+                    } catch (error) {
+                        console.error("Error deleting from Firebase:", error);
+                        alert('Failed to delete gang sheet from cloud.');
+                    }
+                } else {
+                    // Delete from localStorage
+                    try {
+                        const sheets = JSON.parse(localStorage.getItem(`gangsheet_saved_${user.email}`) || '[]');
+                        const updatedSheets = sheets.filter(s => s.id !== id);
+                        localStorage.setItem(`gangsheet_saved_${user.email}`, JSON.stringify(updatedSheets));
+                        setSavedSheets(updatedSheets);
+                    } catch (error) {
+                        console.error("Error deleting locally:", error);
+                        alert('Failed to delete gang sheet.');
+                    }
                 }
             };
 
