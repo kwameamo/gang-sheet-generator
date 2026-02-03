@@ -52,16 +52,40 @@
         const { useState, useEffect, useRef } = React;
 
         // Firebase Configuration
-        // IMPORTANT: Replace these with your actual Firebase config
-        const firebaseConfig = {
-            apiKey: "AIzaSyDKrZjjyI32XMhFBj-12tpau-aZJsOZ8pg",
-            authDomain: "gang-sheet-generator-ab17c.firebaseapp.com",
-            projectId: "gang-sheet-generator-ab17c",
-            storageBucket: "gang-sheet-generator-ab17c.firebasestorage.app",
-            messagingSenderId: "856756686451",
-            appId: "1:856756686451:web:90373cc3f29764e6b26406",
-            measurementId: "G-J4ZMRE0DQK"
+        // SECURITY: Use environment variables in production
+        // This setup checks for environment variables first, then falls back to placeholders
+        
+        const getFirebaseConfig = () => {
+            // For production deployments (Netlify, Vercel, etc.)
+            // Set these as environment variables in your hosting platform
+            const envConfig = {
+                apiKey: window.ENV?.FIREBASE_API_KEY,
+                authDomain: window.ENV?.FIREBASE_AUTH_DOMAIN,
+                projectId: window.ENV?.FIREBASE_PROJECT_ID,
+                storageBucket: window.ENV?.FIREBASE_STORAGE_BUCKET,
+                messagingSenderId: window.ENV?.FIREBASE_MESSAGING_SENDER_ID,
+                appId: window.ENV?.FIREBASE_APP_ID
+            };
+            
+            // Check if environment variables are set
+            if (envConfig.apiKey && envConfig.projectId) {
+                console.log("Using Firebase config from environment variables");
+                return envConfig;
+            }
+            
+            // Fallback config for local development
+            // IMPORTANT: Replace these with your actual values OR set environment variables
+            return {
+                apiKey: "AIzaSyDKrZjjyI32XMhFBj-12tpau-aZJsOZ8pg",
+                authDomain: "gang-sheet-generator-ab17c.firebaseapp.com",
+                projectId: "gang-sheet-generator-ab17c",
+                storageBucket: "gang-sheet-generator-ab17c.firebasestorage.app",
+                messagingSenderId: "856756686451",
+                appId: "1:856756686451:web:90373cc3f29764e6b26406"
+            };
         };
+        
+        const firebaseConfig = getFirebaseConfig();
 
         // Initialize Firebase
         let auth, db;
@@ -97,6 +121,12 @@
             const [user, setUser] = useState(null);
             const [showAuth, setShowAuth] = useState(false);
             const [activeTab, setActiveTab] = useState('generator');
+            const [showLanding, setShowLanding] = useState(true);
+            const [showPrivacy, setShowPrivacy] = useState(false);
+            const [showTerms, setShowTerms] = useState(false);
+            const [showContact, setShowContact] = useState(false);
+            const [isLoading, setIsLoading] = useState(false);
+            const [loadingMessage, setLoadingMessage] = useState('');
             
             const [uploadedImage, setUploadedImage] = useState(null);
             const [imageDataUrl, setImageDataUrl] = useState(null);
@@ -121,6 +151,43 @@
             
             const exportCanvasRef = useRef(null);
             const googleButtonRef = useRef(null);
+
+            // Loading Spinner Component
+            const LoadingSpinner = () => (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[10000]">
+                    <div className="bg-white rounded-lg p-8 max-w-sm w-full mx-4 text-center">
+                        <div className="mb-4">
+                            <svg className="animate-spin h-12 w-12 mx-auto text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                        </div>
+                        <p className="text-lg font-semibold text-gray-900">{loadingMessage}</p>
+                        <p className="text-sm text-gray-500 mt-2">Please wait...</p>
+                    </div>
+                </div>
+            );
+
+            // Format date helper
+            const formatDate = (date) => {
+                if (!date) return 'Unknown date';
+                
+                try {
+                    // Handle Firestore Timestamp
+                    if (date && typeof date.toDate === 'function') {
+                        return date.toDate().toLocaleDateString();
+                    }
+                    // Handle ISO string or Date object
+                    const dateObj = new Date(date);
+                    if (isNaN(dateObj.getTime())) {
+                        return 'Unknown date';
+                    }
+                    return dateObj.toLocaleDateString();
+                } catch (error) {
+                    console.error('Error formatting date:', error);
+                    return 'Unknown date';
+                }
+            };
 
             // Unit conversion functions (all internal calculations are in mm)
             const convertFromMM = (mm, targetUnit) => {
@@ -174,11 +241,28 @@
                 
                 const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
                     if (firebaseUser) {
+                        // Check if user document exists, create if not
+                        const userDocRef = db.collection('users').doc(firebaseUser.uid);
+                        const userDoc = await userDocRef.get();
+                        
+                        if (!userDoc.exists) {
+                            // New user - create document with registration date
+                            await userDocRef.set({
+                                email: firebaseUser.email,
+                                name: firebaseUser.displayName,
+                                picture: firebaseUser.photoURL,
+                                memberSince: firebase.firestore.FieldValue.serverTimestamp()
+                            });
+                        }
+                        
+                        const userDataFromDb = userDoc.exists ? userDoc.data() : {};
+                        
                         const userData = {
                             uid: firebaseUser.uid,
                             email: firebaseUser.email,
                             name: firebaseUser.displayName,
-                            picture: firebaseUser.photoURL
+                            picture: firebaseUser.photoURL,
+                            memberSince: userDataFromDb.memberSince?.toDate?.() || new Date()
                         };
                         setUser(userData);
                         await loadSavedSheets(firebaseUser.uid);
@@ -207,11 +291,17 @@
                     
                     if (useDemoMode) {
                         // Create demo user
+                        const memberSince = localStorage.getItem('gangsheet_demo_membersince') || new Date().toISOString();
+                        if (!localStorage.getItem('gangsheet_demo_membersince')) {
+                            localStorage.setItem('gangsheet_demo_membersince', memberSince);
+                        }
+                        
                         const demoUser = {
                             email: 'demo@gangsheet.app',
                             name: 'Demo User',
                             picture: 'https://ui-avatars.com/api/?name=Demo+User&background=6366f1&color=fff',
-                            isDemo: true
+                            isDemo: true,
+                            memberSince: new Date(memberSince)
                         };
                         setUser(demoUser);
                         localStorage.setItem('gangsheet_user', JSON.stringify(demoUser));
@@ -698,6 +788,34 @@
                 }
             };
 
+            // Compress image to reduce payload size
+            const compressImage = async (dataUrl, maxWidth = 800, quality = 0.7) => {
+                return new Promise((resolve) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let width = img.width;
+                        let height = img.height;
+                        
+                        // Scale down if too large
+                        if (width > maxWidth) {
+                            height = (height * maxWidth) / width;
+                            width = maxWidth;
+                        }
+                        
+                        canvas.width = width;
+                        canvas.height = height;
+                        
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+                        
+                        // Compress as JPEG
+                        resolve(canvas.toDataURL('image/jpeg', quality));
+                    };
+                    img.src = dataUrl;
+                });
+            };
+
             const saveSheet = async () => {
                 if (!user) {
                     alert('Please log in to save gang sheets');
@@ -705,75 +823,233 @@
                     return;
                 }
                 
-                const name = sheetName || `Gang Sheet ${new Date().toLocaleDateString()}`;
-                const sheetData = {
-                    name,
-                    paperSize,
-                    imageDimensions,
-                    imageDataUrl,
-                    spacing,
-                    margin,
-                    unit,
-                    createdAt: new Date().toISOString(),
-                    images: images.map(img => ({
-                        dataUrl: img.dataUrl,
-                        dimensions: img.dimensions,
-                        count: img.count,
-                        aspectRatio: img.aspectRatio,
-                        lockAspectRatio: img.lockAspectRatio
-                    }))
-                };
+                setIsLoading(true);
+                setLoadingMessage('Compressing images...');
                 
-                if (firebaseInitialized && db) {
-                    // Save to Firebase
-                    try {
-                        sheetData.createdAt = firebase.firestore.FieldValue.serverTimestamp();
-                        await db.collection('users').doc(user.uid).collection('gangSheets').add(sheetData);
-                        setSheetName('');
-                        alert('Gang sheet saved to cloud successfully!');
-                        await loadSavedSheets(user.uid);
-                    } catch (error) {
-                        console.error("Error saving to Firebase:", error);
-                        alert('Failed to save to cloud. Saving locally instead.');
-                        saveSheetLocal(sheetData);
+                const name = sheetName || `Gang Sheet ${new Date().toLocaleDateString()}`;
+                
+                try {
+                    // Compress all images to reduce payload size
+                    const compressedImages = await Promise.all(
+                        images.map(async (img, index) => {
+                            setLoadingMessage(`Compressing image ${index + 1} of ${images.length}...`);
+                            return {
+                                dataUrl: await compressImage(img.dataUrl, 600, 0.6),
+                                dimensions: img.dimensions,
+                                count: img.count,
+                                aspectRatio: img.aspectRatio,
+                                lockAspectRatio: img.lockAspectRatio
+                            };
+                        })
+                    );
+                    
+                    setLoadingMessage('Preparing to save...');
+                    
+                    // Also compress the main preview image
+                    const compressedMainImage = imageDataUrl ? await compressImage(imageDataUrl, 600, 0.6) : null;
+                    
+                    const sheetData = {
+                        name,
+                        paperSize,
+                        imageDimensions,
+                        imageDataUrl: compressedMainImage,
+                        spacing,
+                        margin,
+                        unit,
+                        createdAt: new Date().toISOString(),
+                        images: compressedImages
+                    };
+                    
+                    // Check payload size
+                    const dataSize = JSON.stringify(sheetData).length;
+                    const maxFirestoreSize = 1048576; // 1MB limit for Firestore
+                    
+                    console.log(`Payload size: ${(dataSize / 1024).toFixed(2)}KB`);
+                    
+                    if (dataSize > maxFirestoreSize) {
+                        setIsLoading(false);
+                        setLoadingMessage('');
+                        throw new Error(`Compressed payload (${(dataSize / 1024).toFixed(0)}KB) still exceeds Firestore limit. Try using fewer images or smaller images.`);
                     }
-                } else {
-                    // Save to localStorage
-                    saveSheetLocal(sheetData);
+                    
+                    if (firebaseInitialized && db && !user.isDemo) {
+                        // Save to Firebase
+                        setLoadingMessage('Saving to cloud...');
+                        try {
+                            const docRef = await db.collection('users').doc(user.uid).collection('gangSheets').add({
+                                ...sheetData,
+                                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                            });
+                            
+                            console.log('Sheet saved to Firebase with ID:', docRef.id);
+                            setSheetName('');
+                            
+                            setLoadingMessage('Loading saved sheets...');
+                            // Reload saved sheets to update the list
+                            await loadSavedSheets(user.uid);
+                            
+                            setIsLoading(false);
+                            setLoadingMessage('');
+                            alert('Gang sheet saved to cloud successfully!');
+                        } catch (error) {
+                            console.error("Error saving to Firebase:", error);
+                            setIsLoading(false);
+                            setLoadingMessage('');
+                            
+                            if (error.code === 'resource-exhausted' || error.message.includes('payload')) {
+                                throw new Error('Images too large for cloud storage. Try using smaller images or fewer copies.');
+                            }
+                            throw error;
+                        }
+                    } else {
+                        // Save to localStorage
+                        setLoadingMessage('Saving locally...');
+                        saveSheetLocal(sheetData);
+                        setIsLoading(false);
+                        setLoadingMessage('');
+                    }
+                } catch (error) {
+                    console.error("Save error:", error);
+                    setIsLoading(false);
+                    setLoadingMessage('');
+                    alert(`Failed to save: ${error.message}\n\nTip: Try using smaller images or fewer images per sheet.`);
                 }
             };
 
             const saveSheetLocal = (sheetData) => {
                 try {
-                    sheetData.id = Date.now();
+                    sheetData.id = Date.now().toString(); // Ensure ID is string for consistency
                     const sheets = JSON.parse(localStorage.getItem(`gangsheet_saved_${user.email}`) || '[]');
+                    
+                    // Check localStorage quota
+                    const testData = JSON.stringify([...sheets, sheetData]);
+                    const dataSize = testData.length;
+                    const maxLocalStorageSize = 5242880; // ~5MB typical limit
+                    
+                    console.log(`localStorage size: ${(dataSize / 1024).toFixed(2)}KB`);
+                    
+                    if (dataSize > maxLocalStorageSize) {
+                        // Try to save just this sheet alone
+                        const singleSheetSize = JSON.stringify([sheetData]).length;
+                        if (singleSheetSize > maxLocalStorageSize) {
+                            throw new Error('This gang sheet is too large to save locally. Try using smaller images.');
+                        }
+                        
+                        throw new Error('localStorage is full. Please delete some old sheets first, or use cloud storage by signing in.');
+                    }
+                    
                     sheets.push(sheetData);
                     localStorage.setItem(`gangsheet_saved_${user.email}`, JSON.stringify(sheets));
                     setSavedSheets(sheets);
                     setSheetName('');
-                    alert('Gang sheet saved locally!');
+                    alert('Gang sheet saved locally!\n\nNote: Local storage has limited space. Sign in to save unlimited sheets to the cloud.');
                 } catch (error) {
                     console.error("Error saving locally:", error);
-                    alert('Failed to save gang sheet.');
+                    
+                    if (error.name === 'QuotaExceededError' || error.message.includes('quota')) {
+                        alert('localStorage is full!\n\nOptions:\n1. Delete old sheets\n2. Sign in to save to cloud (unlimited)\n3. Use smaller images');
+                    } else {
+                        alert(`Failed to save locally: ${error.message}`);
+                    }
                 }
             };
 
-            const loadSheet = (sheet) => {
-                setPaperSize(sheet.paperSize);
-                setImageDimensions(sheet.imageDimensions);
-                setWidthInput(String(Math.round(sheet.imageDimensions.width * 100) / 100));
-                setHeightInput(String(Math.round(sheet.imageDimensions.height * 100) / 100));
-                setImageDataUrl(sheet.imageDataUrl);
+            const loadSheet = async (sheet) => {
+                setIsLoading(true);
+                setLoadingMessage('Loading gang sheet...');
                 
-                const img = new Image();
-                img.src = sheet.imageDataUrl;
-                img.onload = () => {
-                    const imageAspectRatio = img.width / img.height;
-                    setAspectRatio(imageAspectRatio);
-                    setUploadedImage(img);
-                };
-                
-                setActiveTab('generator');
+                try {
+                    // Set basic properties
+                    setPaperSize(sheet.paperSize);
+                    setSpacing(sheet.spacing || 5);
+                    setMargin(sheet.margin || 6.35);
+                    setUnit(sheet.unit || 'mm');
+                    
+                    // Update margin input
+                    setMarginInput(String(sheet.margin || 6.35));
+                    setSpacingInput(formatValue(sheet.spacing || 5, sheet.unit || 'mm'));
+                    
+                    // Restore all images if available
+                    if (sheet.images && sheet.images.length > 0) {
+                        const restoredImages = await Promise.all(
+                            sheet.images.map(async (imgData, index) => {
+                                return new Promise((resolve) => {
+                                    const img = new Image();
+                                    img.onload = () => {
+                                        resolve({
+                                            id: Date.now() + index,
+                                            dataUrl: imgData.dataUrl,
+                                            imgElement: img,
+                                            dimensions: imgData.dimensions,
+                                            widthInput: String(Math.round(imgData.dimensions.width * 100) / 100),
+                                            heightInput: String(Math.round(imgData.dimensions.height * 100) / 100),
+                                            aspectRatio: imgData.aspectRatio,
+                                            lockAspectRatio: imgData.lockAspectRatio,
+                                            count: imgData.count || 1
+                                        });
+                                    };
+                                    img.src = imgData.dataUrl;
+                                });
+                            })
+                        );
+                        
+                        setImages(restoredImages);
+                        
+                        // Select first image
+                        if (restoredImages.length > 0) {
+                            const firstImg = restoredImages[0];
+                            setSelectedImageIndex(0);
+                            setImageDataUrl(firstImg.dataUrl);
+                            setUploadedImage(firstImg.imgElement);
+                            setImageDimensions(firstImg.dimensions);
+                            setWidthInput(firstImg.widthInput);
+                            setHeightInput(firstImg.heightInput);
+                            setAspectRatio(firstImg.aspectRatio);
+                            setLockAspectRatio(firstImg.lockAspectRatio);
+                        }
+                    } else if (sheet.imageDataUrl) {
+                        // Fallback for old single-image sheets
+                        const img = new Image();
+                        img.onload = () => {
+                            const imageAspectRatio = img.width / img.height;
+                            setAspectRatio(imageAspectRatio);
+                            setUploadedImage(img);
+                            setImageDataUrl(sheet.imageDataUrl);
+                            setImageDimensions(sheet.imageDimensions);
+                            setWidthInput(String(Math.round(sheet.imageDimensions.width * 100) / 100));
+                            setHeightInput(String(Math.round(sheet.imageDimensions.height * 100) / 100));
+                            
+                            // Create single image in array
+                            const singleImage = {
+                                id: Date.now(),
+                                dataUrl: sheet.imageDataUrl,
+                                imgElement: img,
+                                dimensions: sheet.imageDimensions,
+                                widthInput: String(Math.round(sheet.imageDimensions.width * 100) / 100),
+                                heightInput: String(Math.round(sheet.imageDimensions.height * 100) / 100),
+                                aspectRatio: imageAspectRatio,
+                                lockAspectRatio: true,
+                                count: 1
+                            };
+                            setImages([singleImage]);
+                            setSelectedImageIndex(0);
+                        };
+                        img.src = sheet.imageDataUrl;
+                    }
+                    
+                    // Switch to generator tab
+                    setActiveTab('generator');
+                    
+                    setTimeout(() => {
+                        setIsLoading(false);
+                        setLoadingMessage('');
+                    }, 500);
+                } catch (error) {
+                    console.error('Error loading sheet:', error);
+                    setIsLoading(false);
+                    setLoadingMessage('');
+                    alert('Failed to load gang sheet. Please try again.');
+                }
             };
 
             const deleteSheet = async (id) => {
@@ -829,6 +1105,444 @@
 
             return (
                 <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+                    {/* Loading Spinner */}
+                    {isLoading && <LoadingSpinner />}
+                    
+                    {/* Auth Modal - Always rendered at top level */}
+                    {showAuth && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4">
+                            <div className="bg-white rounded-lg p-8 max-w-md w-full">
+                                <h2 className="text-2xl font-bold mb-6 text-center">Sign in to continue</h2>
+                                <div className="space-y-4">
+                                    <button
+                                        onClick={handleGoogleSignIn}
+                                        className="w-full flex items-center justify-center gap-3 px-6 py-3 bg-white border-2 border-gray-300 rounded-lg hover:bg-gray-50 transition font-medium"
+                                    >
+                                        <svg className="w-6 h-6" viewBox="0 0 24 24">
+                                            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                                            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                                            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                                            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                                        </svg>
+                                        Sign in with Google
+                                    </button>
+                                    <button
+                                        onClick={() => setShowAuth(false)}
+                                        className="w-full px-4 py-2 text-sm text-gray-600 hover:text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition"
+                                    >
+                                        Cancel
+                                    </button>
+                                </div>
+                                <p className="mt-6 text-xs text-gray-500 text-center">
+                                    By signing in, you agree to our Terms of Service and Privacy Policy.
+                                    Your data is stored securely in the cloud.
+                                </p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Privacy Policy Modal - Always rendered at top level */}
+                    {showPrivacy && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4">
+                            <div className="bg-white rounded-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+                                <div className="sticky top-0 bg-white border-b px-6 py-4 flex justify-between items-center">
+                                    <h2 className="text-2xl font-bold">Privacy Policy</h2>
+                                    <button onClick={() => setShowPrivacy(false)} className="text-gray-500 hover:text-gray-700 p-2">
+                                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                        </svg>
+                                    </button>
+                                </div>
+                                <div className="px-6 py-4">
+                                    <p className="text-sm text-gray-600 mb-4">Effective Date: {new Date().toLocaleDateString()}</p>
+                                    
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">1. Information We Collect</h3>
+                                    <p className="text-sm mb-3">When you use Gang Sheet Generator, we collect:</p>
+                                    <ul className="list-disc pl-6 mb-4 text-sm space-y-1">
+                                        <li>Email address and name from your Google account (when you sign in)</li>
+                                        <li>Gang sheet designs you create and save</li>
+                                        <li>Usage data to improve our service</li>
+                                    </ul>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">2. How We Use Your Information</h3>
+                                    <p className="text-sm mb-3">We use your information to:</p>
+                                    <ul className="list-disc pl-6 mb-4 text-sm space-y-1">
+                                        <li>Provide and maintain the service</li>
+                                        <li>Save your gang sheets to your account</li>
+                                        <li>Improve and optimize our application</li>
+                                        <li>Communicate with you about updates</li>
+                                    </ul>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">3. Data Storage</h3>
+                                    <p className="text-sm mb-3">Your data is stored securely using:</p>
+                                    <ul className="list-disc pl-6 mb-4 text-sm space-y-1">
+                                        <li>Firebase Cloud Firestore (Google Cloud Platform)</li>
+                                        <li>Industry-standard encryption</li>
+                                        <li>Your browser's local storage for temporary data</li>
+                                    </ul>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">4. Data Sharing</h3>
+                                    <p className="text-sm mb-3">We do NOT share your personal information with third parties except:</p>
+                                    <ul className="list-disc pl-6 mb-4 text-sm space-y-1">
+                                        <li>As required by law</li>
+                                        <li>With your explicit consent</li>
+                                        <li>With service providers (like Firebase) who help us operate the service</li>
+                                    </ul>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">5. Your Rights</h3>
+                                    <p className="text-sm mb-3">You have the right to:</p>
+                                    <ul className="list-disc pl-6 mb-4 text-sm space-y-1">
+                                        <li>Access your data</li>
+                                        <li>Delete your account and all associated data</li>
+                                        <li>Export your gang sheets</li>
+                                        <li>Opt-out of communications</li>
+                                    </ul>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">6. Cookies</h3>
+                                    <p className="text-sm mb-4">We use browser storage (localStorage) to maintain your session. No tracking cookies are used for advertising.</p>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">7. Children's Privacy</h3>
+                                    <p className="text-sm mb-4">Our service is not directed to children under 13. We do not knowingly collect information from children.</p>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">8. Changes to Privacy Policy</h3>
+                                    <p className="text-sm mb-4">We may update this policy. We will notify users of significant changes via email or in-app notification.</p>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">9. Contact Us</h3>
+                                    <p className="text-sm mb-4">For privacy questions, contact us through the Contact page.</p>
+                                </div>
+                                <div className="sticky bottom-0 bg-white border-t px-6 py-4">
+                                    <button
+                                        onClick={() => setShowPrivacy(false)}
+                                        className="w-full px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
+                                    >
+                                        Close
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Terms of Service Modal - Always rendered at top level */}
+                    {showTerms && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4">
+                            <div className="bg-white rounded-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+                                <div className="sticky top-0 bg-white border-b px-6 py-4 flex justify-between items-center">
+                                    <h2 className="text-2xl font-bold">Terms of Service</h2>
+                                    <button onClick={() => setShowTerms(false)} className="text-gray-500 hover:text-gray-700 p-2">
+                                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                        </svg>
+                                    </button>
+                                </div>
+                                <div className="px-6 py-4">
+                                    <p className="text-sm text-gray-600 mb-4">Last Updated: {new Date().toLocaleDateString()}</p>
+                                    
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">1. Acceptance of Terms</h3>
+                                    <p className="text-sm mb-4">By accessing and using Gang Sheet Generator ("the Service"), you accept and agree to be bound by these Terms of Service.</p>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">2. Description of Service</h3>
+                                    <p className="text-sm mb-4">Gang Sheet Generator is a free web-based tool that allows users to create, save, and export gang sheets for printing purposes.</p>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">3. User Accounts</h3>
+                                    <ul className="list-disc pl-6 mb-4 text-sm space-y-1">
+                                        <li>You must provide accurate information when creating an account</li>
+                                        <li>You are responsible for maintaining the security of your account</li>
+                                        <li>You are responsible for all activities under your account</li>
+                                        <li>You must notify us of any unauthorized use</li>
+                                    </ul>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">4. Acceptable Use</h3>
+                                    <p className="text-sm mb-2">You agree NOT to:</p>
+                                    <ul className="list-disc pl-6 mb-4 text-sm space-y-1">
+                                        <li>Use the Service for any illegal purpose</li>
+                                        <li>Violate any intellectual property rights</li>
+                                        <li>Upload malicious code or viruses</li>
+                                        <li>Attempt to gain unauthorized access to the Service</li>
+                                        <li>Use the Service to harm, harass, or impersonate others</li>
+                                    </ul>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">5. Intellectual Property</h3>
+                                    <ul className="list-disc pl-6 mb-4 text-sm space-y-1">
+                                        <li>You retain all rights to content you upload</li>
+                                        <li>CurioGraphicsYard owns the Service and its original content</li>
+                                        <li>You may not copy, modify, or distribute our code without permission</li>
+                                    </ul>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">6. Disclaimer of Warranties</h3>
+                                    <p className="text-sm mb-2">The Service is provided "AS IS" without warranties of any kind. We do not guarantee:</p>
+                                    <ul className="list-disc pl-6 mb-4 text-sm space-y-1">
+                                        <li>Uninterrupted or error-free operation</li>
+                                        <li>Accuracy of results</li>
+                                        <li>Fitness for a particular purpose</li>
+                                    </ul>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">7. Limitation of Liability</h3>
+                                    <p className="text-sm mb-4">CurioGraphicsYard shall not be liable for any indirect, incidental, special, consequential, or punitive damages arising from your use of the Service.</p>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">8. Modifications to Service</h3>
+                                    <p className="text-sm mb-4">We reserve the right to modify or discontinue the Service at any time, with or without notice.</p>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">9. Termination</h3>
+                                    <p className="text-sm mb-4">We may terminate or suspend your account at any time for violation of these Terms.</p>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">10. Governing Law</h3>
+                                    <p className="text-sm mb-4">These Terms shall be governed by the laws of the jurisdiction where CurioLabs is registered.</p>
+
+                                    <h3 className="text-lg font-semibold mt-4 mb-2">11. Contact</h3>
+                                    <p className="text-sm mb-4">For questions about these Terms, please use the Contact page.</p>
+                                </div>
+                                <div className="sticky bottom-0 bg-white border-t px-6 py-4">
+                                    <button
+                                        onClick={() => setShowTerms(false)}
+                                        className="w-full px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
+                                    >
+                                        Close
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Contact Modal - Always rendered at top level */}
+                    {showContact && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4">
+                            <div className="bg-white rounded-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                                <div className="sticky top-0 bg-white border-b px-6 py-4 flex justify-between items-center">
+                                    <h2 className="text-2xl font-bold">Contact Us</h2>
+                                    <button onClick={() => setShowContact(false)} className="text-gray-500 hover:text-gray-700 p-2">
+                                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                        </svg>
+                                    </button>
+                                </div>
+                                
+                                <div className="px-6 py-4 space-y-6">
+                                    <div>
+                                        <h3 className="text-lg font-semibold mb-2">Get in Touch</h3>
+                                        <p className="text-gray-600 text-sm">
+                                            We'd love to hear from you! Whether you have questions, feedback, or need support, 
+                                            we're here to help.
+                                        </p>
+                                    </div>
+
+                                    <div className="bg-gray-50 rounded-lg p-4">
+                                        <h4 className="font-semibold mb-2 flex items-center gap-2 text-sm">
+                                            <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                                            </svg>
+                                            Email Support
+                                        </h4>
+                                        <a href="mailto:support@curiographicsyard.com" className="text-indigo-600 hover:text-indigo-700 text-sm">
+                                            support@curiographicsyard.com
+                                        </a>
+                                        <p className="text-xs text-gray-600 mt-1">Response time: 24-48 hours</p>
+                                    </div>
+
+                                    <div className="bg-gray-50 rounded-lg p-4">
+                                        <h4 className="font-semibold mb-2 flex items-center gap-2 text-sm">
+                                            <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                                            </svg>
+                                            Business Inquiries
+                                        </h4>
+                                        <a href="mailto:business@curiolabs.com" className="text-indigo-600 hover:text-indigo-700 text-sm">
+                                            business@curiolabs.com
+                                        </a>
+                                        <p className="text-xs text-gray-600 mt-1">For partnerships and collaborations</p>
+                                    </div>
+
+                                    <div className="bg-gray-50 rounded-lg p-4">
+                                        <h4 className="font-semibold mb-2 flex items-center gap-2 text-sm">
+                                            <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                                            </svg>
+                                            Social Media
+                                        </h4>
+                                        <div className="flex gap-4 mt-2">
+                                            <a href="#" className="text-sm text-gray-600 hover:text-indigo-600 transition">Twitter</a>
+                                            <a href="#" className="text-sm text-gray-600 hover:text-indigo-600 transition">Facebook</a>
+                                            <a href="#" className="text-sm text-gray-600 hover:text-indigo-600 transition">Instagram</a>
+                                        </div>
+                                    </div>
+
+                                    <div className="border-t pt-4">
+                                        <p className="text-xs text-gray-600 text-center">
+                                            <strong>CurioGraphicsYard</strong> is engineered by <strong>CurioLabs</strong><br />
+                                            Registered Trademark ®
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="sticky bottom-0 bg-white border-t px-6 py-4">
+                                    <button
+                                        onClick={() => setShowContact(false)}
+                                        className="w-full px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
+                                    >
+                                        Close
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    
+                    {/* Landing Page */}
+                    {showLanding && !user && (
+                        <div className="min-h-screen flex flex-col">
+                            {/* Landing Header */}
+                            <header className="bg-white shadow-sm">
+                                <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8 flex justify-between items-center">
+                                    <h1 className="text-2xl font-bold text-gray-900">CurioGraphicsYard</h1>
+                                    <button
+                                        onClick={() => setShowAuth(true)}
+                                        className="px-6 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition"
+                                    >
+                                        Sign In
+                                    </button>
+                                </div>
+                            </header>
+
+                            {/* Hero Section */}
+                            <div className="flex-1 flex items-center justify-center px-4 py-16">
+                                <div className="max-w-5xl mx-auto text-center">
+                                    <h1 className="text-5xl md:text-6xl font-bold text-gray-900 mb-6">
+                                        Create Perfect Gang Sheets
+                                        <span className="block text-indigo-600 mt-2">In Seconds</span>
+                                    </h1>
+                                    <p className="text-xl text-gray-600 mb-8 max-w-3xl mx-auto">
+                                        Professional gang sheet generator for sticker makers, print businesses, and creatives. 
+                                        Upload your designs, set dimensions, and export at 300 DPI.
+                                    </p>
+                                    
+                                    <div className="flex flex-col sm:flex-row gap-4 justify-center mb-12">
+                                        <button
+                                            onClick={() => {
+                                                setIsLoading(true);
+                                                setLoadingMessage('Initializing generator...');
+                                                setTimeout(() => {
+                                                    setShowLanding(false);
+                                                    setIsLoading(false);
+                                                    setLoadingMessage('');
+                                                }, 800);
+                                            }}
+                                            className="px-8 py-4 text-lg font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition shadow-lg"
+                                        >
+                                            Start Creating Free
+                                        </button>
+                                        <button
+                                            onClick={() => setShowAuth(true)}
+                                            className="px-8 py-4 text-lg font-semibold text-indigo-600 bg-white hover:bg-gray-50 border-2 border-indigo-600 rounded-lg transition"
+                                        >
+                                            Sign In
+                                        </button>
+                                    </div>
+
+                                    {/* Features Grid */}
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mt-16">
+                                        <div className="bg-white rounded-lg p-6 shadow-md">
+                                            <div className="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+                                                <svg className="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                                </svg>
+                                            </div>
+                                            <h3 className="text-lg font-semibold mb-2">Multi-Image Support</h3>
+                                            <p className="text-gray-600 text-sm">Upload up to 5 different designs per sheet. Perfect for variety packs!</p>
+                                        </div>
+
+                                        <div className="bg-white rounded-lg p-6 shadow-md">
+                                            <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+                                                <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                                </svg>
+                                            </div>
+                                            <h3 className="text-lg font-semibold mb-2">300 DPI Export</h3>
+                                            <p className="text-gray-600 text-sm">Export in JPEG, PDF, or PNG at professional print quality.</p>
+                                        </div>
+
+                                        <div className="bg-white rounded-lg p-6 shadow-md">
+                                            <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+                                                <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
+                                                </svg>
+                                            </div>
+                                            <h3 className="text-lg font-semibold mb-2">Cloud Storage</h3>
+                                            <p className="text-gray-600 text-sm">Save your sheets to the cloud and access them anywhere.</p>
+                                        </div>
+
+                                        <div className="bg-white rounded-lg p-6 shadow-md">
+                                            <div className="w-12 h-12 bg-yellow-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+                                                <svg className="w-6 h-6 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                                                </svg>
+                                            </div>
+                                            <h3 className="text-lg font-semibold mb-2">Custom Dimensions</h3>
+                                            <p className="text-gray-600 text-sm">Set exact sizes in mm, cm, inches, or pixels for each image.</p>
+                                        </div>
+
+                                        <div className="bg-white rounded-lg p-6 shadow-md">
+                                            <div className="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+                                                <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1H5a1 1 0 01-1-1v-3zM14 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1h-4a1 1 0 01-1-1v-3z" />
+                                                </svg>
+                                            </div>
+                                            <h3 className="text-lg font-semibold mb-2">Auto-Fill Sheet</h3>
+                                            <p className="text-gray-600 text-sm">Automatically calculate how many copies fit on your paper.</p>
+                                        </div>
+
+                                        <div className="bg-white rounded-lg p-6 shadow-md">
+                                            <div className="w-12 h-12 bg-pink-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+                                                <svg className="w-6 h-6 text-pink-600" fill="currentColor" viewBox="0 0 20 20">
+                                                    <path fillRule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clipRule="evenodd" />
+                                                </svg>
+                                            </div>
+                                            <h3 className="text-lg font-semibold mb-2">100% Free</h3>
+                                            <p className="text-gray-600 text-sm">All features unlocked. No hidden fees. No paywalls. Forever.</p>
+                                        </div>
+                                    </div>
+
+                                    {/* CTA Section */}
+                                    <div className="mt-16 bg-white rounded-2xl shadow-xl p-8">
+                                        <h2 className="text-3xl font-bold mb-4">Ready to Get Started?</h2>
+                                        <p className="text-gray-600 mb-6">Join thousands of creators making perfect gang sheets</p>
+                                        <button
+                                            onClick={() => {
+                                                setIsLoading(true);
+                                                setLoadingMessage('Initializing generator...');
+                                                setTimeout(() => {
+                                                    setShowLanding(false);
+                                                    setIsLoading(false);
+                                                    setLoadingMessage('');
+                                                }, 800);
+                                            }}
+                                            className="px-8 py-4 text-lg font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition shadow-lg"
+                                        >
+                                            Try It Now - No Sign Up Required
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Landing Footer */}
+                            <footer className="bg-gray-900 text-white py-8">
+                                <div className="max-w-7xl mx-auto px-4 text-center">
+                                    <p className="text-sm text-gray-400">
+                                        © {new Date().getFullYear()} CurioGraphicsYard. All rights reserved.<br />
+                                        Engineered by <span className="text-indigo-400 font-semibold">CurioLabs</span> • Registered Trademark ®
+                                    </p>
+                                    <div className="flex justify-center gap-4 mt-4 text-sm text-gray-400">
+                                        <button onClick={() => setShowPrivacy(true)} className="hover:text-white transition">Privacy</button>
+                                        <span>•</span>
+                                        <button onClick={() => setShowTerms(true)} className="hover:text-white transition">Terms</button>
+                                        <span>•</span>
+                                        <button onClick={() => setShowContact(true)} className="hover:text-white transition">Contact</button>
+                                    </div>
+                                </div>
+                            </footer>
+                        </div>
+                    )}
+
+                    {/* Main App (shows when landing is closed or user is logged in) */}
+                    {(!showLanding || user) && (
+                    <>
                     {/* Header */}
                     <header className="bg-white shadow-sm">
                         <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8 flex justify-between items-center">
@@ -909,39 +1623,6 @@
                             </div>
                         )}
                     </header>
-
-                    {/* Auth Modal */}
-                    {showAuth && (
-                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                            <div className="bg-white rounded-lg p-8 max-w-md w-full">
-                                <h2 className="text-2xl font-bold mb-6 text-center">Sign in to continue</h2>
-                                <div className="space-y-4">
-                                    <button
-                                        onClick={handleGoogleSignIn}
-                                        className="w-full flex items-center justify-center gap-3 px-6 py-3 bg-white border-2 border-gray-300 rounded-lg hover:bg-gray-50 transition font-medium"
-                                    >
-                                        <svg className="w-6 h-6" viewBox="0 0 24 24">
-                                            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                                            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                                            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                                            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                                        </svg>
-                                        Sign in with Google
-                                    </button>
-                                    <button
-                                        onClick={() => setShowAuth(false)}
-                                        className="w-full px-4 py-2 text-sm text-gray-600 hover:text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition"
-                                    >
-                                        Cancel
-                                    </button>
-                                </div>
-                                <p className="mt-6 text-xs text-gray-500 text-center">
-                                    By signing in, you agree to our Terms of Service and Privacy Policy.
-                                    Your data is stored securely in the cloud.
-                                </p>
-                            </div>
-                        </div>
-                    )}
 
                     {/* Main Content */}
                     <div className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
@@ -1402,7 +2083,9 @@
                                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                                             {savedSheets.map((sheet) => (
                                                 <div key={sheet.id} className="border rounded-lg overflow-hidden hover:shadow-lg transition">
-                                                    <div className="aspect-[210/297] bg-gray-100 relative overflow-hidden">
+                                                    <div className="aspect-[210/297] bg-white relative overflow-hidden" style={{
+                                                        backgroundImage: 'repeating-conic-gradient(#f3f4f6 0% 25%, transparent 0% 50%) 50% / 20px 20px'
+                                                    }}>
                                                         {sheet.imageDataUrl && (
                                                             <img 
                                                                 src={sheet.imageDataUrl} 
@@ -1414,7 +2097,7 @@
                                                     <div className="p-4">
                                                         <h3 className="font-semibold text-lg mb-2 truncate">{sheet.name}</h3>
                                                         <p className="text-sm text-gray-600 mb-3">
-                                                            {sheet.paperSize} • {new Date(sheet.createdAt).toLocaleDateString()}
+                                                            {sheet.paperSize} • {formatDate(sheet.createdAt)}
                                                         </p>
                                                         <div className="flex gap-2">
                                                             <button
@@ -1466,7 +2149,9 @@
                                             </div>
                                             <div className="bg-gray-50 rounded-lg p-4">
                                                 <p className="text-sm text-gray-600">Member Since</p>
-                                                <p className="text-2xl font-bold text-indigo-600">2024</p>
+                                                <p className="text-2xl font-bold text-indigo-600">
+                                                    {user.memberSince ? new Date(user.memberSince).getFullYear() : new Date().getFullYear()}
+                                                </p>
                                             </div>
                                         </div>
                                     </div>
@@ -1599,15 +2284,17 @@
                                     <p className="mt-1">Engineered by <span className="text-indigo-400 font-semibold">CurioLabs</span> • Registered Trademark ®</p>
                                 </div>
                                 <div className="flex gap-4 text-sm text-gray-400">
-                                    <a href="#" className="hover:text-white transition">Privacy Policy</a>
+                                    <button onClick={() => setShowPrivacy(true)} className="hover:text-white transition">Privacy Policy</button>
                                     <span>•</span>
-                                    <a href="#" className="hover:text-white transition">Terms of Service</a>
+                                    <button onClick={() => setShowTerms(true)} className="hover:text-white transition">Terms of Service</button>
                                     <span>•</span>
-                                    <a href="#" className="hover:text-white transition">Contact</a>
+                                    <button onClick={() => setShowContact(true)} className="hover:text-white transition">Contact</button>
                                 </div>
                             </div>
                         </div>
                     </footer>
+                    </>
+                    )}
                 </div>
             );
         };
